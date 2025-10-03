@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"log/slog"
 	"time"
 	"toss/tunnel"
@@ -13,27 +12,28 @@ type ProtocolSpecification struct {
 }
 
 type DetectHandler struct {
-	logger *slog.Logger
-	specs  []ProtocolSpecification
+	logger    *slog.Logger
+	detectors []tunnel.Detector
 }
 
-func NewDetectHandler(logger *slog.Logger, specs []ProtocolSpecification) *DetectHandler {
+func NewDetectHandler(logger *slog.Logger, detectors []tunnel.Detector) *DetectHandler {
 	return &DetectHandler{
-		logger: logger,
-		specs:  specs,
+		logger:    logger,
+		detectors: detectors,
 	}
 }
 
 func (h DetectHandler) Handle(tun *tunnel.Tunnel) error {
-	var streamHandler tunnel.Handler
+	var streamHandler tunnel.Handler = nil
 
 	if err := tun.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 		return err
 	}
 
-	for _, protocol := range h.specs {
-		if protocol.Detector.Detect(tun, context.Background()) {
-			streamHandler = protocol.Handler
+	for _, detector := range h.detectors {
+		if isDetected, handler := detector.Detect(tun); isDetected {
+			streamHandler = handler
+			break
 		}
 	}
 

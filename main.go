@@ -151,13 +151,13 @@ func handleTunnel(tun *tunnel.Tunnel, logger *slog.Logger) {
 }
 
 func handleClientFirstProtocol(tun *tunnel.Tunnel, logger *slog.Logger) {
-	specs := []handler.ProtocolSpecification{
-		{Detector: detector.NewHttp11Detector(), Handler: handler.NewHttp11Handler(logger)},
-		{Detector: detector.NewHttp2Detector(), Handler: handler.NewHttp2Handler(logger)},
-		{Detector: detector.NewTlsDetector(), Handler: handler.NewTlsHandler(logger, certManager)},
+	detectors := []tunnel.Detector{
+		detector.NewHttp11Detector(logger),
+		detector.NewHttp2Detector(logger),
+		detector.NewTlsDetector(logger, certManager),
 	}
 
-	detectHandler := handler.NewDetectHandler(logger, specs)
+	detectHandler := handler.NewDetectHandler(logger, detectors)
 
 	if err := detectHandler.Handle(tun); err != nil && err != io.EOF {
 		logger.Error("error occurred", slog.Any("error", err))

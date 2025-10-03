@@ -1,20 +1,29 @@
 package detector
 
 import (
-	"context"
+	"fmt"
+	"log/slog"
+	"toss/cert"
 	"toss/tunnel"
+	"toss/tunnel/handler"
 )
 
 type TlsDetector struct {
+	logger      *slog.Logger
+	certManager *cert.Manager
 }
 
-func NewTlsDetector() *TlsDetector {
-	return &TlsDetector{}
+func NewTlsDetector(logger *slog.Logger, certManager *cert.Manager) *TlsDetector {
+	return &TlsDetector{
+		logger:      logger,
+		certManager: certManager,
+	}
 }
 
 var (
 	allowList = []string{
 		"www.example.com",
+		"toss.im",
 	}
 )
 
@@ -30,7 +39,7 @@ const (
 	tlsNameTypeHostName = 0
 )
 
-func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) bool {
+func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 	// TLS Record structure
 	// <5 byte> TLS Record Header
 	// <n byte> TLS Record Payload
@@ -51,11 +60,11 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 	// <2 byte> Length
 	header, err := tun.Downstream.Reader.Peek(tlsRecordHeaderLen)
 	if err != nil {
-		return false
+		return false, nil
 	}
 
 	if header[0] != tlsContentTypeHandshake {
-		return false
+		return false, nil
 	}
 
 	versionMajor := header[1]
@@ -63,18 +72,18 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 
 	// 3.0 ~ 3.4
 	if versionMajor != 3 || versionMinor > 4 {
-		return false
+		return false, nil
 	}
 
 	payloadLen := int(header[3])<<8 | int(header[4])
 	if payloadLen <= 0 || payloadLen > maxTlsRecordSize {
-		return false
+		return false, nil
 	}
 
 	recordLen := tlsRecordHeaderLen + payloadLen
 	record, err := tun.Downstream.Reader.Peek(recordLen)
 	if err != nil {
-		return false
+		return false, nil
 	}
 
 	// Handshake Payload Structure
@@ -96,17 +105,17 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 	//   <n byte> Handshake Message
 	payload := record[tlsRecordHeaderLen:]
 	if len(payload) < 4 {
-		return false
+		return false, nil
 	}
 
 	handshakeType := payload[0]
 	if handshakeType != tlsHandshakeMessageTypeClientHello {
-		return false
+		return false, nil
 	}
 
 	handshakeLen := int(payload[1])<<16 | int(payload[2])<<8 | int(payload[3])
 	if handshakeLen < 0 {
-		return false
+		return false, nil
 	}
 
 	// ClientHello structure
@@ -130,7 +139,7 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 	//   <2 byte> Ext Length
 	//   <n byte> Ext Data
 	if len(payload) < 4+handshakeLen {
-		return false
+		return false, nil
 	}
 
 	clientHello := payload[4 : 4+handshakeLen]
@@ -143,12 +152,12 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 
 	// Session ID Length
 	if len(clientHello) < 1 {
-		return false
+		return false, nil
 	}
 	sessionIdLen := int(clientHello[0])
 	clientHello = clientHello[1:]
 	if sessionIdLen <= 0 {
-		return false
+		return false, nil
 	}
 
 	// Session ID
@@ -156,12 +165,12 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 
 	// Cipher Suites Len
 	if len(clientHello) < 2 {
-		return false
+		return false, nil
 	}
 	cipherSuitesLen := int(clientHello[0])<<8 | int(clientHello[1])
 	clientHello = clientHello[2:]
 	if cipherSuitesLen <= 0 {
-		return false
+		return false, nil
 	}
 
 	// Cipher Suites
@@ -169,12 +178,12 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 
 	// Compression Methods Len
 	if len(clientHello) < 1 {
-		return false
+		return false, nil
 	}
 	compressionMethodsLen := int(clientHello[0])
 	clientHello = clientHello[1:]
 	if compressionMethodsLen <= 0 {
-		return false
+		return false, nil
 	}
 
 	// Compression Methods
@@ -182,22 +191,22 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 
 	// Extensions Len
 	if len(clientHello) < 2 {
-		return false
+		return false, nil
 	}
 
 	extensionsLen := int(clientHello[0])<<8 | int(clientHello[1])
 	clientHello = clientHello[2:]
 	if extensionsLen <= 0 {
-		return false
+		return false, nil
 	}
 
 	// Extensions
 	if len(clientHello) < extensionsLen {
-		return false
+		return false, nil
 	}
 
 	if extensionsLen != len(clientHello) {
-		return false
+		return false, nil
 	}
 
 	extensions := clientHello
@@ -270,5 +279,14 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 		}
 	}
 
-	return true
+	for _, serverName := range serverNameList {
+		for _, allowServerName := range allowList {
+			if serverName == allowServerName {
+				slog.Info(fmt.Sprintf("%v in allowed list: bypass", serverName))
+				return true, handler.NewByPassHandler(d.logger)
+			}
+		}
+	}
+
+	return true, handler.NewTlsHandler(d.logger, d.certManager)
 }

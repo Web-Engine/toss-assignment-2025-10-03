@@ -2,15 +2,19 @@ package detector
 
 import (
 	"bytes"
-	"context"
+	"log/slog"
 	"toss/tunnel"
+	"toss/tunnel/handler"
 )
 
 type Http11Detector struct {
+	logger *slog.Logger
 }
 
-func NewHttp11Detector() *Http11Detector {
-	return &Http11Detector{}
+func NewHttp11Detector(logger *slog.Logger) *Http11Detector {
+	return &Http11Detector{
+		logger: logger,
+	}
 }
 
 var httpMethods = [][]byte{
@@ -25,17 +29,17 @@ var httpMethods = [][]byte{
 	[]byte("TRACE "),
 }
 
-func (detector Http11Detector) Detect(tun *tunnel.Tunnel, ctx context.Context) bool {
+func (d Http11Detector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 	peek, err := tun.Downstream.Reader.Peek(7)
 	if err != nil {
-		return false
+		return false, nil
 	}
 
 	for _, method := range httpMethods {
 		if bytes.Equal(method, peek[:len(method)]) {
-			return true
+			return true, handler.NewHttp11Handler(d.logger)
 		}
 	}
 
-	return false
+	return false, nil
 }
