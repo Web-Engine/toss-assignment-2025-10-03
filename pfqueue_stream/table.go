@@ -1,16 +1,16 @@
-package stream
+package pfqueue_stream
 
 import (
 	"sync"
-	"toss/detector"
+	"toss/pfqueue_detector"
 )
 
 type Table struct {
 	flowMap  sync.Map
-	detector *detector.Detector
+	detector *pfqueue_detector.Detector
 }
 
-func NewTable(detector *detector.Detector) *Table {
+func NewTable(detector *pfqueue_detector.Detector) *Table {
 	return &Table{
 		detector: detector,
 	}

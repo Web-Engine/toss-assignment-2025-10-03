@@ -1,4 +1,4 @@
-package detector
+package pfqueue_detector
 
 import "bytes"
 

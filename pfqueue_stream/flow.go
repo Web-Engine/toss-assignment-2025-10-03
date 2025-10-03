@@ -1,4 +1,4 @@
-package stream
+package pfqueue_stream
 
 import (
 	"bytes"

@@ -2,14 +2,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"syscall"
 	"time"
+	"toss/stream"
+	"toss/stream/detector"
+	"toss/stream/handler"
 )
 
 const (
@@ -46,20 +47,6 @@ func main() {
 		}
 
 		go handleConnection(conn)
-	}
-}
-
-type tcpConnectionIO struct {
-	connection *net.TCPConn
-	reader     *bufio.Reader
-	writer     *bufio.Writer
-}
-
-func newTcpConnectionIO(conn *net.TCPConn) *tcpConnectionIO {
-	return &tcpConnectionIO{
-		connection: conn,
-		reader:     bufio.NewReader(conn),
-		writer:     bufio.NewWriter(conn),
 	}
 }
 
@@ -106,74 +93,71 @@ func handleConnection(clientConn net.Conn) {
 	_ = clientTcpConn.SetNoDelay(true)
 	_ = serverTcpConn.SetNoDelay(true)
 
-	clientIO := newTcpConnectionIO(clientTcpConn)
-	serverIO := newTcpConnectionIO(serverTcpConn)
-	_ = clientTcpConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	_ = serverTcpConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	duplexStream := stream.NewDuplexStreamFromConn(clientTcpConn, serverTcpConn)
+	defer duplexStream.Close()
 
-	clientPeek, _ := clientIO.reader.Peek(1)
-	serverPeek, _ := serverIO.reader.Peek(1)
+	_ = duplexStream.Client.Conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_ = duplexStream.Server.Conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 
-	_ = clientTcpConn.SetReadDeadline(time.Time{})
-	_ = serverTcpConn.SetReadDeadline(time.Time{})
+	clientPeek, _ := duplexStream.Client.Reader.Peek(1)
+	serverPeek, _ := duplexStream.Server.Reader.Peek(1)
+
+	_ = duplexStream.Client.Conn.SetReadDeadline(time.Time{})
+	_ = duplexStream.Server.Conn.SetReadDeadline(time.Time{})
 
 	if len(clientPeek) > 0 {
 		log.Printf("Client first protocol received")
 		// Client-first protocol
-		go pipeDuplex(clientIO, serverIO)
+		err = handleClientFirstProtocol(duplexStream)
 	} else if len(serverPeek) > 0 {
 		// Server-first protocol
 		log.Printf("Server first protocol received")
-		go pipeDuplex(clientIO, serverIO)
+		err = handleServerFirstProtocol(duplexStream)
 	} else {
 		// Loop again? or something
 		// TODO
-		return
 	}
-
-	// Pipe server to client
-	chanErr := make(chan error, 2)
-	go func() {
-		_, err := io.Copy(serverConn, clientConn)
-		if err == nil {
-			_ = closeWrite(serverConn)
-		}
-		chanErr <- err
-	}()
-
-	// Pipe client to server
-	go func() {
-		_, err := io.Copy(clientConn, serverConn)
-		if err == nil {
-			_ = closeWrite(clientConn)
-		}
-		chanErr <- err
-	}()
-
-	if err := <-chanErr; err != nil && err != io.EOF {
-		log.Printf("pipe error for %s <-> %s: %v", clientConn.RemoteAddr(), target, err)
-	}
-}
-
-func pipeDuplex(clientIO, serverIO *tcpConnectionIO) {
-	// TODO: error channel close
-	go pipe(clientIO, serverIO)
-	go pipe(serverIO, clientIO)
-}
-
-func pipe(from, to *tcpConnectionIO) {
-	_, err := from.reader.WriteTo(to.writer)
 
 	if err != nil {
-		_ = closeWrite(from.connection)
+		log.Printf("Error processing stream: %v", err)
 	}
 }
 
-func closeWrite(c net.Conn) error {
-	type cw interface{ CloseWrite() error }
-	if x, ok := c.(cw); ok {
-		return x.CloseWrite()
+func handleClientFirstProtocol(duplex *stream.DuplexStream) error {
+	protocols := []struct {
+		detector stream.Detector
+		handler  stream.Handler
+	}{
+		{detector: detector.NewHttp11Detector(), handler: handler.NewHttp11Handler()},
+		{detector: detector.NewHttp2Detector(), handler: handler.NewHttp2Handler()},
+		{detector: detector.NewTlsDetector(), handler: handler.NewTlsHandler()},
 	}
-	_ = c.SetDeadline(time.Now().Add(50 * time.Millisecond))
-	return nil
+
+	var streamHandler stream.Handler
+
+	if err := duplex.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		return err
+	}
+
+	for _, protocol := range protocols {
+		if protocol.detector.Detect(duplex, context.Background()) {
+			streamHandler = protocol.handler
+		}
+	}
+
+	if err := duplex.SetReadDeadline(time.Time{}); err != nil {
+		return err
+	}
+
+	if streamHandler == nil {
+		streamHandler = handler.NewPipeHandler()
+	}
+
+	return streamHandler.Handle(duplex)
+}
+
+func handleServerFirstProtocol(duplex *stream.DuplexStream) error {
+	pipe := handler.NewPipeHandler()
+
+	return pipe.Handle(duplex)
 }

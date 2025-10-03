@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"toss/detector"
-	"toss/stream"
+	"toss/pfqueue_detector"
+	"toss/pfqueue_stream"
 
 	nfq "github.com/AkihiroSuda/go-netfilter-queue"
 	"github.com/google/gopacket"
@@ -27,7 +27,7 @@ type workerContext struct {
 	wg           *sync.WaitGroup
 	queue        *nfq.NFQueue
 	id           int
-	table        *stream.Table
+	table        *pfqueue_stream.Table
 	assemblyChan chan *assembleInput
 }
 
@@ -50,8 +50,8 @@ func pfqueue_main() {
 
 	log.Printf("nfqueue ready")
 
-	dtr := &detector.Detector{}
-	table := stream.NewTable(dtr)
+	dtr := &pfqueue_detector.Detector{}
+	table := pfqueue_stream.NewTable(dtr)
 	pool := tcpassembly.NewStreamPool(table)
 	assembler := tcpassembly.NewAssembler(pool)
 
