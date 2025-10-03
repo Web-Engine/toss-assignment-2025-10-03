@@ -1,53 +1,82 @@
 package main
 
 import (
+	"context"
 	"log"
-	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	nfq "github.com/AkihiroSuda/go-netfilter-queue"
 	"github.com/google/gopacket/layers"
 )
 
+const numWorkers = 4
+const BYPASS_MARK =
+const CONTINUOUS_MARK =
+
 func main() {
-	queue, err := nfq.NewNFQueue(0, 100, nfq.NF_DEFAULT_PACKET_SIZE)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	queue, err := nfq.NewNFQueue(1, 100, nfq.NF_DEFAULT_PACKET_SIZE)
 	if err != nil {
 		log.Fatalf("failed to create nfqueue: %v", err)
 	}
 	defer queue.Close()
 
 	log.Printf("nfqueue started")
+	var wg sync.WaitGroup
 
-	go processQueue(queue)
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-}
-
-func processQueue(queue *nfq.NFQueue) {
 	packetChan := queue.GetPackets()
-	log.Printf("Starting processing queue")
 
-	for packet := range packetChan {
-		log.Printf("received packet")
-		go processPacket(packet)
+	for i := 1; i <= numWorkers; i++ {
+		wg.Add(1)
+		go worker(packetChan, ctx, &wg)
+	}
+
+	// Wait exit signal
+	<-ctx.Done()
+
+	// Wait workgroup end
+	wg.Wait()
+}
+
+func worker(packetChan <-chan nfq.NFPacket, ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	log.Printf("worker started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case packet, ok := <-packetChan:
+			log.Printf("received packet %v", packet)
+			if !ok {
+				return
+			}
+
+			process(packet)
+		}
 	}
 }
 
-func processPacket(packet nfq.NFPacket) {
-	layerIPv4 := packet.Packet.Layer(layers.LayerTypeIPv4)
-	if layerIPv4 == nil {
+func process(packet nfq.NFPacket) {
+	transportLayer := packet.Packet.TransportLayer()
+
+	if transportLayer != nil {
+		packet.SetVerdict(nfq.NF_ACCEPT)
+		log.Printf("There are no transport layer")
 		return
 	}
 
-	layerTCP := packet.Packet.Layer(layers.LayerTypeTCP)
-	if layerTCP == nil {
+	if transportLayer.LayerType() != layers.LayerTypeTCP {
+		log.Printf("Packet is not a TCP layer: %v", transportLayer.LayerType())
 		return
 	}
 
-	payload := layerTCP.LayerPayload()
+	payload := transportLayer.LayerPayload()
 	log.Printf("payload length: %v", len(payload))
 }
 
