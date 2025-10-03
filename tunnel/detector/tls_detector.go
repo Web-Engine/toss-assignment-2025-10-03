@@ -13,6 +13,12 @@ func NewTlsDetector() *TlsDetector {
 	return &TlsDetector{}
 }
 
+var (
+	allowList = []string{
+		"www.example.com",
+	}
+)
+
 const (
 	tlsRecordHeaderLen = 5
 	maxTlsRecordSize   = 1 << 16
@@ -87,8 +93,8 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 	//  - 16: ClientKeyExchange
 	//  - 20: Finished
 	// <repeat>
-	//  - <3 byte> Handshake Length
-	//  - <n byte> Handshake Message
+	//   <3 byte> Handshake Length
+	//   <n byte> Handshake Message
 	payload := record[tlsRecordHeaderLen:]
 	if len(payload) < 4 {
 		return false
@@ -114,16 +120,16 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 	// < 1 byte> Compression Methods Len
 	// < n byte> Compression Methods
 	// < 2 byte> Extensions Len
-	// <repeat>
-	// - <2 byte> Ext Type
-	//   - 0: server_name
-	//   - 1: max_fragment_length
-	//   - 2: client_certificate_url
-	//   - 3: trusted_ca_keys
-	//   - 4: truncated_hmac
-	//   - 5: status_request
-	// - <2 byte> Ext Length
-	// - <n byte> Ext Data
+	// <repeat> Extension
+	//   <2 byte> Ext Type
+	//    - 0: server_name
+	//    - 1: max_fragment_length
+	//    - 2: client_certificate_url
+	//    - 3: trusted_ca_keys
+	//    - 4: truncated_hmac
+	//    - 5: status_request
+	//   <2 byte> Ext Length
+	//   <n byte> Ext Data
 	if len(payload) < 4+handshakeLen {
 		return false
 	}
@@ -191,8 +197,12 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 		return false
 	}
 
-	extensions := clientHello[:extensionsLen]
-	var serverName string
+	if extensionsLen != len(clientHello) {
+		return false
+	}
+
+	extensions := clientHello
+	var serverNameList []string
 
 	for {
 		if len(extensions) < 4 {
@@ -202,7 +212,6 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 		extType := int(extensions[0])<<8 | int(extensions[1])
 		extLen := int(extensions[2])<<8 | int(extensions[3])
 		extensions = extensions[4:]
-		log.Printf("Parsing extension: %v, %v", extType, extLen)
 
 		if extLen <= 0 {
 			continue
@@ -219,38 +228,50 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 			continue
 		}
 
-		// Server Name structure
-		// - <1 byte> NameType
-		//   - 0: HostName
-		// - <when NameType is HostName>
-		//   - <2 byte> HostName Len
-		//   - <n byte> HostName
-
-		// NameType
-		if len(ext) < 1 {
-			continue
-		}
-		nameType := int(ext[0])
-		if nameType != tlsNameTypeHostName {
-			continue
-		}
-		ext = ext[1:]
-
-		// HostName Len
+		// ServerNameList structure
+		// <2 byte> ServerNameList Len
+		// <repeat> ServerName
+		//   <1 byte> NameType
+		//    - 0: HostName
+		//   <when NameType is HostName>
+		//     <2 byte> HostName Len
+		//     <n byte> HostName
 		if len(ext) < 2 {
 			continue
 		}
-		hostNameLen := int(ext[0])<<8 | int(ext[1])
+
+		serverNameListLen := int(ext[0])<<8 | int(ext[1])
 		ext = ext[2:]
 
-		if len(ext) < hostNameLen {
-			continue
-		}
+		for i := 0; i < serverNameListLen; i++ {
+			// NameType
+			if len(ext) < 1 {
+				continue
+			}
 
-		serverName = string(ext[:hostNameLen])
+			nameType := int(ext[0])
+			if nameType != tlsNameTypeHostName {
+				continue
+			}
+			ext = ext[1:]
+
+			// HostName Len
+			if len(ext) < 2 {
+				continue
+			}
+			hostNameLen := int(ext[0])<<8 | int(ext[1])
+			ext = ext[2:]
+
+			if len(ext) < hostNameLen {
+				continue
+			}
+
+			serverName := string(ext[:hostNameLen])
+			serverNameList = append(serverNameList, serverName)
+		}
 	}
 
-	log.Printf("server name: %v", serverName)
+	log.Printf("server name: %v", serverNameList)
 
 	return true
 }
