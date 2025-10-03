@@ -115,12 +115,10 @@ func handleConnection(clientConn net.Conn) {
 	_ = tun.Upstream.SetReadDeadline(time.Time{})
 
 	if len(clientPeek) > 0 {
-		log.Printf("Downstream first protocol received")
 		// Downstream-first protocol
 		err = handleClientFirstProtocol(tun)
 	} else if len(serverPeek) > 0 {
 		// Upstream-first protocol
-		log.Printf("Upstream first protocol received")
 		err = handleServerFirstProtocol(tun)
 	} else {
 		// Loop again? or something

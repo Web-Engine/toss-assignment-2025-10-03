@@ -2,9 +2,8 @@ package handler
 
 import (
 	"crypto/tls"
-	"errors"
+	"fmt"
 	"toss/tunnel"
-	"toss/tunnel/detector"
 )
 
 type TlsHandler struct {
@@ -18,13 +17,44 @@ func NewTlsHandler(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, 
 }
 
 func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
-	var clientHello *tls.ClientHelloInfo
+	var (
+		upstreamTlsConn    *tls.Conn
+		upstreamNegotiated string
+	)
 
 	downstreamConfig := &tls.Config{
-		GetCertificate: func(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			clientHello = info
+		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+			cert, err := handler.getCertificate(info)
+			if err != nil {
+				return nil, err
+			}
 
-			return handler.getCertificate(info)
+			upstreamConfig := &tls.Config{
+				NextProtos: info.SupportedProtos,
+			}
+
+			if info.ServerName != "" {
+				upstreamConfig.ServerName = info.ServerName
+			}
+
+			conn := tls.Client(tun.Upstream, upstreamConfig)
+			if err := conn.Handshake(); err != nil {
+				return nil, err
+			}
+
+			negotiated := conn.ConnectionState().NegotiatedProtocol
+
+			upstreamTlsConn = conn
+			upstreamNegotiated = negotiated
+
+			cfg := &tls.Config{
+				Certificates: []tls.Certificate{*cert},
+			}
+			if negotiated != "" {
+				cfg.NextProtos = []string{negotiated}
+			}
+
+			return cfg, nil
 		},
 	}
 
@@ -33,31 +63,22 @@ func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 		return err
 	}
 
-	if clientHello == nil {
-		return errors.New("ClientHello is nil")
+	downstreamNegotiated := downstreamTlsConn.ConnectionState().NegotiatedProtocol
+
+	if downstreamNegotiated != upstreamNegotiated {
+		return fmt.Errorf("ALPN mismatch: downstream=%s upstream=%s", downstreamNegotiated, upstreamNegotiated)
 	}
 
-	upstreamConfig := &tls.Config{}
-	if clientHello.ServerName != "" {
-		upstreamConfig.ServerName = clientHello.ServerName
+	var streamHandler tunnel.Handler
+	switch downstreamNegotiated {
+	case "h2":
+		streamHandler = NewHttp2Handler()
+	case "http/1.1":
+		streamHandler = NewHttp11Handler()
+	default:
+		streamHandler = NewPipeHandler()
 	}
-
-	if len(clientHello.SupportedProtos) > 0 {
-		upstreamConfig.NextProtos = clientHello.SupportedProtos
-	}
-
-	upstreamTlsConn := tls.Client(tun.Upstream, upstreamConfig)
-	if err := upstreamTlsConn.Handshake(); err != nil {
-		return err
-	}
-
-	protocols := []ProtocolHandler{
-		{Detector: detector.NewHttp11Detector(), Handler: NewHttp11Handler()},
-		{Detector: detector.NewHttp2Detector(), Handler: NewHttp2Handler()},
-	}
-
-	restHandler := NewClientFirstHandler(protocols)
 
 	tlsTun := tunnel.NewTunnelFromConn(downstreamTlsConn, upstreamTlsConn)
-	return restHandler.Handle(tlsTun)
+	return streamHandler.Handle(tlsTun)
 }
