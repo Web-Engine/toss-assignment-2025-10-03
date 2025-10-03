@@ -1,159 +1,179 @@
+// main.go
 package main
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"io"
 	"log"
-	"os/signal"
-	"sync"
+	"net"
 	"syscall"
-	"toss/detector"
-	"toss/stream"
-
-	nfq "github.com/AkihiroSuda/go-netfilter-queue"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/tcpassembly"
+	"time"
 )
 
-const numQueueWorkers = 4
-
-type assembleInput struct {
-	flow gopacket.Flow
-	tcp  *layers.TCP
-}
-
-type workerContext struct {
-	ctx          context.Context
-	wg           *sync.WaitGroup
-	queue        *nfq.NFQueue
-	id           int
-	table        *stream.Table
-	assemblyChan chan *assembleInput
-}
+const (
+	listenAddr   = ":3129"          // TPROXY 대상으로 고정
+	dialTimeout  = 10 * time.Second // 원래 목적지로 dialing timeout
+	connDeadline = 5 * time.Minute  // 전체 connection deadline
+)
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	listenConfig := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var err error
+			err = c.Control(func(fd uintptr) {
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_IP, syscall.IP_TRANSPARENT, 1)
+			})
 
-	log.Printf("nfqueue creating")
-
-	queues := make([]*nfq.NFQueue, numQueueWorkers)
-	for i := 0; i < numQueueWorkers; i++ {
-		queue, err := nfq.NewNFQueue(uint16(i), 100, nfq.NF_DEFAULT_PACKET_SIZE)
-		if err != nil {
-			log.Panicf("Failed to create queue(%v): %v", i, err)
-		}
-
-		defer queue.Close()
-		queues[i] = queue
+			return err
+		},
 	}
 
-	log.Printf("nfqueue ready")
-
-	dtr := &detector.Detector{}
-	table := stream.NewTable(dtr)
-	pool := tcpassembly.NewStreamPool(table)
-	assembler := tcpassembly.NewAssembler(pool)
-
-	assemblerChan := make(chan *assembleInput)
-
-	go assemblerWorker(assemblerChan, assembler)
-
-	var wg sync.WaitGroup
-
-	for i := 0; i < numQueueWorkers; i++ {
-		workerCtx := &workerContext{
-			id:           i,
-			table:        table,
-			queue:        queues[i],
-			ctx:          ctx,
-			wg:           &wg,
-			assemblyChan: assemblerChan,
-		}
-		wg.Add(1)
-		go queueWorker(workerCtx)
+	listener, err := listenConfig.Listen(context.Background(), "tcp", listenAddr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", listenAddr, err)
 	}
+	defer listener.Close()
 
-	// Wait exit signal
-	<-ctx.Done()
-
-	// Wait workgroup end
-	wg.Wait()
-}
-
-func queueWorker(ctx *workerContext) {
-	defer ctx.wg.Done()
-	log.Printf("Worker#%v: started", ctx.id)
-	defer log.Printf("Worker#%v: exited", ctx.id)
-
-	packetChan := ctx.queue.GetPackets()
+	log.Printf("tproxy-bypass (no-flags) listening on %s", listenAddr)
 
 	for {
-		select {
-		case <-ctx.ctx.Done():
-			return
-
-		case packet, ok := <-packetChan:
-			log.Printf("Worker#%v: received packet", ctx.id)
-			if !ok {
-				return
-			}
-
-			processPacket(&packet, ctx)
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("accept error: %v", err)
+			continue
 		}
+
+		go handleConnection(conn)
 	}
 }
 
-func processPacket(packet *nfq.NFPacket, ctx *workerContext) {
-	ipv4Layer := packet.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	tcpLayer := packet.Packet.Layer(layers.LayerTypeTCP).(*layers.TCP)
-
-	if ipv4Layer == nil {
-		packet.SetVerdict(nfq.NF_ACCEPT)
-		log.Printf("We supports only IPv4")
-		return
-	}
-
-	if tcpLayer == nil {
-		packet.SetVerdict(nfq.NF_ACCEPT)
-		log.Printf("Packet is not a TCP layer: %v", tcpLayer.LayerType())
-		return
-	}
-
-	ipv4Flow := ipv4Layer.NetworkFlow()
-	tcpFlow := tcpLayer.TransportFlow()
-
-	key := ipv4Flow.String() + "|" + tcpFlow.String()
-
-	flow := ctx.table.GetOrCreate(key)
-
-	flow.Lock()
-	defer flow.Unlock()
-
-	if flow.IsDecided() {
-		packet.SetVerdictMark(nfq.NF_ACCEPT, flow.Mark())
-		return
-	}
-
-	if tcpLayer.SYN {
-		packet.SetVerdict(nfq.NF_ACCEPT)
-		return
-	}
-
-	flow.AddPacket(packet)
-
-	ctx.assemblyChan <- &assembleInput{flow: ipv4Flow, tcp: tcpLayer}
-
-	payload := tcpLayer.LayerPayload()
-	log.Printf("payload length: %v", len(payload))
-	log.Printf("syn: %v, ack: %v", tcpLayer.SYN, tcpLayer.ACK)
-
-	//packet.SetVerdict(nfq.NF_DROP)
+type tcpConnectionIO struct {
+	connection *net.TCPConn
+	reader     *bufio.Reader
+	writer     *bufio.Writer
 }
 
-func assemblerWorker(assemblyChan chan *assembleInput, assembler *tcpassembly.Assembler) {
-	for input := range assemblyChan {
-		assembler.Assemble(input.flow, input.tcp)
-		assembler.FlushAll()
+func newTcpConnectionIO(conn *net.TCPConn) *tcpConnectionIO {
+	return &tcpConnectionIO{
+		connection: conn,
+		reader:     bufio.NewReader(conn),
+		writer:     bufio.NewWriter(conn),
 	}
+}
+
+func handleConnection(clientConn net.Conn) {
+	defer clientConn.Close()
+	_ = clientConn.SetDeadline(time.Now().Add(connDeadline))
+
+	localAddr := clientConn.LocalAddr()
+	tcpLocal, ok := localAddr.(*net.TCPAddr)
+	if !ok {
+		log.Printf("unsupported local addr type: %T from %v", localAddr, clientConn.RemoteAddr())
+		return
+	}
+
+	originalIP := tcpLocal.IP
+	originalPort := tcpLocal.Port
+	if originalIP == nil || originalPort == 0 {
+		log.Printf("cannot determine original destination from LocalAddr=%v", localAddr)
+		return
+	}
+
+	target := net.JoinHostPort(originalIP.String(), fmt.Sprintf("%d", originalPort))
+	log.Printf("clientConn %s -> original %s", clientConn.RemoteAddr(), target)
+
+	serverConn, err := net.DialTimeout("tcp", target, dialTimeout)
+	if err != nil {
+		log.Printf("dial original %s failed: %v", target, err)
+		return
+	}
+	defer serverConn.Close()
+
+	clientTcpConn, ok := clientConn.(*net.TCPConn)
+	if !ok {
+		log.Printf("TCP local connection expected: %T from %v", clientConn, clientConn.RemoteAddr())
+		return
+	}
+
+	serverTcpConn, ok := serverConn.(*net.TCPConn)
+	if !ok {
+		log.Printf("TCP forward connection expected: %T from %v", serverConn, serverConn.RemoteAddr())
+		return
+	}
+
+	_ = clientTcpConn.SetNoDelay(true)
+	_ = serverTcpConn.SetNoDelay(true)
+
+	clientIO := newTcpConnectionIO(clientTcpConn)
+	serverIO := newTcpConnectionIO(serverTcpConn)
+	_ = clientTcpConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_ = serverTcpConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+
+	clientPeek, _ := clientIO.reader.Peek(1)
+	serverPeek, _ := serverIO.reader.Peek(1)
+
+	_ = clientTcpConn.SetReadDeadline(time.Time{})
+	_ = serverTcpConn.SetReadDeadline(time.Time{})
+
+	if len(clientPeek) > 0 {
+		log.Printf("Client first protocol received")
+		// Client-first protocol
+		go pipeDuplex(clientIO, serverIO)
+	} else if len(serverPeek) > 0 {
+		// Server-first protocol
+		log.Printf("Server first protocol received")
+		go pipeDuplex(clientIO, serverIO)
+	} else {
+		// Loop again? or something
+		// TODO
+		return
+	}
+
+	// Pipe server to client
+	chanErr := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(serverConn, clientConn)
+		if err == nil {
+			_ = closeWrite(serverConn)
+		}
+		chanErr <- err
+	}()
+
+	// Pipe client to server
+	go func() {
+		_, err := io.Copy(clientConn, serverConn)
+		if err == nil {
+			_ = closeWrite(clientConn)
+		}
+		chanErr <- err
+	}()
+
+	if err := <-chanErr; err != nil && err != io.EOF {
+		log.Printf("pipe error for %s <-> %s: %v", clientConn.RemoteAddr(), target, err)
+	}
+}
+
+func pipeDuplex(clientIO, serverIO *tcpConnectionIO) {
+	// TODO: error channel close
+	go pipe(clientIO, serverIO)
+	go pipe(serverIO, clientIO)
+}
+
+func pipe(from, to *tcpConnectionIO) {
+	_, err := from.reader.WriteTo(to.writer)
+
+	if err != nil {
+		_ = closeWrite(from.connection)
+	}
+}
+
+func closeWrite(c net.Conn) error {
+	type cw interface{ CloseWrite() error }
+	if x, ok := c.(cw); ok {
+		return x.CloseWrite()
+	}
+	_ = c.SetDeadline(time.Now().Add(50 * time.Millisecond))
+	return nil
 }
