@@ -12,8 +12,6 @@ import (
 )
 
 const numWorkers = 4
-const BYPASS_MARK =
-const CONTINUOUS_MARK =
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
