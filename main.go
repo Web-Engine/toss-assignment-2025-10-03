@@ -86,8 +86,8 @@ func handleConnection(downstreamConn net.Conn) {
 	dstAddr := downstreamConn.LocalAddr()
 
 	logger := slog.Default().With(
-		slog.Any("src", srcAddr),
-		slog.Any("dst", dstAddr),
+		"src", srcAddr.String(),
+		"dst", dstAddr.String(),
 	)
 
 	logger.Debug(fmt.Sprintf("connection request: %v -> %v", srcAddr, dstAddr))
@@ -117,23 +117,32 @@ func handleConnection(downstreamConn net.Conn) {
 	tun := tunnel.NewTunnelFromConn(downstreamTCPConn, upstreamTCPConn)
 	defer tun.Close()
 
-	handleTunnel(tun)
+	logger = slog.Default().With(
+		slog.Group("tunnel",
+			"id", tun.ID(),
+			"src", srcAddr.String(),
+			"dst", dstAddr.String(),
+		),
+	)
+	logger.Debug("tunnel created")
+
+	handleTunnel(tun, logger)
 }
 
-func handleTunnel(tun *tunnel.Tunnel) {
+func handleTunnel(tun *tunnel.Tunnel, logger *slog.Logger) {
 	for i := 0; i < 5; i++ {
-		_ = tun.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		_ = tun.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 		_, _ = tun.Downstream.Reader.Peek(1)
 		_, _ = tun.Upstream.Reader.Peek(1)
 		_ = tun.SetReadDeadline(time.Time{})
 
 		if tun.Downstream.Reader.Buffered() > 0 {
-			handleClientFirstProtocol(tun)
+			handleClientFirstProtocol(tun, logger)
 			return
 		}
 
 		if tun.Upstream.Reader.Buffered() > 0 {
-			handleServerFirstProtocol(tun)
+			handleServerFirstProtocol(tun, logger)
 			return
 		}
 	}
@@ -141,24 +150,24 @@ func handleTunnel(tun *tunnel.Tunnel) {
 	slog.Error("failed to read packet")
 }
 
-func handleClientFirstProtocol(tun *tunnel.Tunnel) {
-	protocols := []handler.ProtocolHandler{
-		{Detector: detector.NewHttp11Detector(), Handler: handler.NewHttp11Handler()},
-		{Detector: detector.NewHttp2Detector(), Handler: handler.NewHttp2Handler()},
-		{Detector: detector.NewTlsDetector(), Handler: handler.NewTlsHandler(certManager.GetCertificate)},
+func handleClientFirstProtocol(tun *tunnel.Tunnel, logger *slog.Logger) {
+	specs := []handler.ProtocolSpecification{
+		{Detector: detector.NewHttp11Detector(), Handler: handler.NewHttp11Handler(logger)},
+		{Detector: detector.NewHttp2Detector(), Handler: handler.NewHttp2Handler(logger)},
+		{Detector: detector.NewTlsDetector(), Handler: handler.NewTlsHandler(logger, certManager)},
 	}
 
-	tunHandler := handler.NewClientFirstHandler(protocols)
+	detectHandler := handler.NewDetectHandler(logger, specs)
 
-	if err := tunHandler.Handle(tun); err != nil && err != io.EOF {
-		slog.Error("error occurred", slog.Any("error", err))
+	if err := detectHandler.Handle(tun); err != nil && err != io.EOF {
+		logger.Error("error occurred", slog.Any("error", err))
 	}
 }
 
-func handleServerFirstProtocol(tun *tunnel.Tunnel) {
-	byPassHandler := handler.NewByPassHandler()
+func handleServerFirstProtocol(tun *tunnel.Tunnel, logger *slog.Logger) {
+	byPassHandler := handler.NewByPassHandler(logger)
 
 	if err := byPassHandler.Handle(tun); err != nil && err != io.EOF {
-		slog.Error("error occurred", slog.Any("error", err))
+		logger.Error("error occurred", slog.Any("error", err))
 	}
 }

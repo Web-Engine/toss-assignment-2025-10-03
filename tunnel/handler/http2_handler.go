@@ -12,16 +12,17 @@ import (
 )
 
 type Http2Handler struct {
+	logger *slog.Logger
 }
 
-func NewHttp2Handler() *Http2Handler {
-	return &Http2Handler{}
+func NewHttp2Handler(logger *slog.Logger) *Http2Handler {
+	return &Http2Handler{
+		logger: logger,
+	}
 }
 
 func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
-	logger := slog.Default().With(
-		slog.Any("version", "h2"),
-	)
+	logger := h.logger.With("context", "Http2Handler")
 
 	downstreamH2Server := &http2.Server{}
 	upstreamH2Transport := &http2.Transport{}

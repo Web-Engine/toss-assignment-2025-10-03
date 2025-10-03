@@ -9,18 +9,19 @@ import (
 )
 
 type Http11Handler struct {
+	logger *slog.Logger
 }
 
-func NewHttp11Handler() *Http11Handler {
-	return &Http11Handler{}
+func NewHttp11Handler(logger *slog.Logger) *Http11Handler {
+	return &Http11Handler{
+		logger: logger,
+	}
 }
 
 func (h *Http11Handler) Handle(tun *tunnel.Tunnel) error {
 	var handler tunnel.Handler = nil
 
-	logger := slog.Default().With(
-		slog.Any("version", "http1.1"),
-	)
+	logger := h.logger.With("context", "Http11Handler")
 
 	for {
 		req, err := http.ReadRequest(tun.Downstream.Reader)
@@ -77,8 +78,8 @@ func (h *Http11Handler) Handle(tun *tunnel.Tunnel) error {
 		upgradeHeader := strings.ToLower(res.Header.Get("Upgrade"))
 
 		if res.StatusCode == 101 && connectionHeader == "upgrade" && upgradeHeader == "websocket" {
-			slog.Info("websocket bypassed")
-			handler = NewByPassHandler()
+			logger.Info("websocket bypassed")
+			handler = NewByPassHandler(h.logger)
 			break
 		}
 	}

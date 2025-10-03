@@ -3,27 +3,38 @@ package handler
 import (
 	"context"
 	"io"
+	"log/slog"
 	"toss/tunnel"
 
 	"golang.org/x/sync/errgroup"
 )
 
-type ByPassHandler struct{}
-
-func NewByPassHandler() *ByPassHandler {
-	return &ByPassHandler{}
+type ByPassHandler struct {
+	logger *slog.Logger
 }
 
-func (handler *ByPassHandler) Handle(tun *tunnel.Tunnel) error {
+func NewByPassHandler(logger *slog.Logger) *ByPassHandler {
+	return &ByPassHandler{
+		logger: logger,
+	}
+}
+
+func (h *ByPassHandler) Handle(tun *tunnel.Tunnel) error {
+	logger := h.logger.With("context", "ByPassHandler")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	g, ctx := errgroup.WithContext(ctx)
 
+	logger.Debug("bypass start")
 	g.Go(func() error { return pipe(tun.Downstream, tun.Upstream) })
 	g.Go(func() error { return pipe(tun.Upstream, tun.Downstream) })
 
-	return g.Wait()
+	err := g.Wait()
+	logger.Debug("bypass end")
+
+	return err
 }
 
 func pipe(from, to *tunnel.Stream) error {

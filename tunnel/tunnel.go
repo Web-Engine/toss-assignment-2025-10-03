@@ -4,24 +4,36 @@ import (
 	"errors"
 	"net"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type Tunnel struct {
 	Downstream *Stream
 	Upstream   *Stream
+
+	id string
 }
 
 func NewTunnel(downstream, upstream *Stream) *Tunnel {
 	return &Tunnel{
 		Downstream: downstream,
 		Upstream:   upstream,
+
+		id: uuid.NewString(),
 	}
 }
 func NewTunnelFromConn(downstream, upstream net.Conn) *Tunnel {
 	return &Tunnel{
 		Downstream: NewStream(downstream),
 		Upstream:   NewStream(upstream),
+
+		id: uuid.NewString(),
 	}
+}
+
+func (tun *Tunnel) ID() string {
+	return tun.id
 }
 
 func (tun *Tunnel) SetReadDeadline(deadline time.Time) error {

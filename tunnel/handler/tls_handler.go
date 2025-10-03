@@ -3,28 +3,36 @@ package handler
 import (
 	"crypto/tls"
 	"fmt"
+	"log/slog"
+	"toss/cert"
 	"toss/tunnel"
 )
 
 type TlsHandler struct {
-	getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	logger      *slog.Logger
+	certManager *cert.Manager
 }
 
-func NewTlsHandler(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *TlsHandler {
+func NewTlsHandler(logger *slog.Logger, certManager *cert.Manager) *TlsHandler {
 	return &TlsHandler{
-		getCertificate: getCertificate,
+		logger:      logger,
+		certManager: certManager,
 	}
 }
 
-func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
+func (h *TlsHandler) Handle(tun *tunnel.Tunnel) error {
+	logger := h.logger.With("context", "TlsHandler")
+
 	var (
 		upstreamTlsConn    *tls.Conn
 		upstreamNegotiated string
 	)
 
+	logger.Debug("start tls handshake")
+
 	downstreamConfig := &tls.Config{
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
-			cert, err := handler.getCertificate(info)
+			crt, err := h.certManager.GetCertificate(info)
 			if err != nil {
 				return nil, err
 			}
@@ -43,12 +51,13 @@ func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 			}
 
 			negotiated := conn.ConnectionState().NegotiatedProtocol
+			logger.Debug("upstream negotiated", "negotiated", negotiated)
 
 			upstreamTlsConn = conn
 			upstreamNegotiated = negotiated
 
 			cfg := &tls.Config{
-				Certificates: []tls.Certificate{*cert},
+				Certificates: []tls.Certificate{*crt},
 			}
 			if negotiated != "" {
 				cfg.NextProtos = []string{negotiated}
@@ -64,6 +73,7 @@ func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 	}
 
 	downstreamNegotiated := downstreamTlsConn.ConnectionState().NegotiatedProtocol
+	logger.Debug("downstream negotiated", "negotiated", downstreamNegotiated)
 
 	if downstreamNegotiated != upstreamNegotiated {
 		return fmt.Errorf("ALPN mismatch: downstream=%s upstream=%s", downstreamNegotiated, upstreamNegotiated)
@@ -72,11 +82,11 @@ func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 	var streamHandler tunnel.Handler
 	switch downstreamNegotiated {
 	case "h2":
-		streamHandler = NewHttp2Handler()
+		streamHandler = NewHttp2Handler(h.logger)
 	case "http/1.1":
-		streamHandler = NewHttp11Handler()
+		streamHandler = NewHttp11Handler(h.logger)
 	default:
-		streamHandler = NewByPassHandler()
+		streamHandler = NewByPassHandler(h.logger)
 	}
 
 	tlsTun := tunnel.NewTunnelFromConn(downstreamTlsConn, upstreamTlsConn)
