@@ -1,0 +1,8 @@
+[tools]
+go = "1.25"
+
+[tasks."wg:up"]
+run = "sudo wg-quick up ./wireguard/wg0.conf"
+
+[tasks."wg:down"]
+run = "sudo wg-quick down ./wireguard/wg0.conf"
