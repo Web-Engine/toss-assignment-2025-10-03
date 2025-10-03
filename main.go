@@ -6,19 +6,39 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"toss/detector"
+	"toss/stream"
 
 	nfq "github.com/AkihiroSuda/go-netfilter-queue"
+	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/tcpassembly"
 )
 
-const numWorkers = 4
+const numQueueWorkers = 4
+
+type assembleInput struct {
+	flow gopacket.Flow
+	tcp  *layers.TCP
+}
+
+type workerContext struct {
+	ctx          context.Context
+	wg           *sync.WaitGroup
+	queue        *nfq.NFQueue
+	id           int
+	table        *stream.Table
+	assemblyChan chan *assembleInput
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	queues := make([]*nfq.NFQueue, numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	log.Printf("nfqueue creating")
+
+	queues := make([]*nfq.NFQueue, numQueueWorkers)
+	for i := 0; i < numQueueWorkers; i++ {
 		queue, err := nfq.NewNFQueue(uint16(i), 100, nfq.NF_DEFAULT_PACKET_SIZE)
 		if err != nil {
 			log.Panicf("Failed to create queue(%v): %v", i, err)
@@ -28,14 +48,30 @@ func main() {
 		queues[i] = queue
 	}
 
-	log.Printf("nfqueue started")
+	log.Printf("nfqueue ready")
+
+	dtr := &detector.Detector{}
+	table := stream.NewTable(dtr)
+	pool := tcpassembly.NewStreamPool(table)
+	assembler := tcpassembly.NewAssembler(pool)
+
+	assemblerChan := make(chan *assembleInput)
+
+	go assemblerWorker(assemblerChan, assembler)
+
 	var wg sync.WaitGroup
 
-	//packetChan := queue.GetPackets()
-
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < numQueueWorkers; i++ {
+		workerCtx := &workerContext{
+			id:           i,
+			table:        table,
+			queue:        queues[i],
+			ctx:          ctx,
+			wg:           &wg,
+			assemblyChan: assemblerChan,
+		}
 		wg.Add(1)
-		go worker(queues[i], ctx, &wg)
+		go queueWorker(workerCtx)
 	}
 
 	// Wait exit signal
@@ -45,131 +81,79 @@ func main() {
 	wg.Wait()
 }
 
-func worker(queue *nfq.NFQueue, ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	log.Printf("worker started")
+func queueWorker(ctx *workerContext) {
+	defer ctx.wg.Done()
+	log.Printf("Worker#%v: started", ctx.id)
+	defer log.Printf("Worker#%v: exited", ctx.id)
 
-	packetChan := queue.GetPackets()
+	packetChan := ctx.queue.GetPackets()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ctx.ctx.Done():
 			return
 
 		case packet, ok := <-packetChan:
-			log.Printf("received packet %v", packet)
+			log.Printf("Worker#%v: received packet", ctx.id)
 			if !ok {
 				return
 			}
 
-			process(packet)
+			processPacket(&packet, ctx)
 		}
 	}
 }
 
-func process(packet nfq.NFPacket) {
-	transportLayer := packet.Packet.TransportLayer()
+func processPacket(packet *nfq.NFPacket, ctx *workerContext) {
+	ipv4Layer := packet.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	tcpLayer := packet.Packet.Layer(layers.LayerTypeTCP).(*layers.TCP)
 
-	if transportLayer != nil {
+	if ipv4Layer == nil {
 		packet.SetVerdict(nfq.NF_ACCEPT)
-		log.Printf("There are no transport layer")
+		log.Printf("We supports only IPv4")
 		return
 	}
 
-	if transportLayer.LayerType() != layers.LayerTypeTCP {
-		log.Printf("Packet is not a TCP layer: %v", transportLayer.LayerType())
+	if tcpLayer == nil {
+		packet.SetVerdict(nfq.NF_ACCEPT)
+		log.Printf("Packet is not a TCP layer: %v", tcpLayer.LayerType())
 		return
 	}
 
-	payload := transportLayer.LayerPayload()
+	ipv4Flow := ipv4Layer.NetworkFlow()
+	tcpFlow := tcpLayer.TransportFlow()
+
+	key := ipv4Flow.String() + "|" + tcpFlow.String()
+
+	flow := ctx.table.GetOrCreate(key)
+
+	flow.Lock()
+	defer flow.Unlock()
+
+	if flow.IsDecided() {
+		packet.SetVerdictMark(nfq.NF_ACCEPT, flow.Mark())
+		return
+	}
+
+	if tcpLayer.SYN {
+		packet.SetVerdict(nfq.NF_ACCEPT)
+		return
+	}
+
+	flow.AddPacket(packet)
+
+	ctx.assemblyChan <- &assembleInput{flow: ipv4Flow, tcp: tcpLayer}
+
+	payload := tcpLayer.LayerPayload()
 	log.Printf("payload length: %v", len(payload))
+	log.Printf("syn: %v, ack: %v", tcpLayer.SYN, tcpLayer.ACK)
+
+	//packet.SetVerdict(nfq.NF_DROP)
 }
 
-// // helpers
-
-// func min(a, b int) int {
-// 	if a < b {
-// 		return a
-// 	}
-// 	return b
-// }
-
-// func isIPv4(pkt []byte) bool {
-// 	if len(pkt) < 1 {
-// 		return false
-// 	}
-// 	return (pkt[0] >> 4) == 4
-// }
-
-// func ipProto(pkt []byte) byte {
-// 	if len(pkt) < 10 {
-// 		return 0
-// 	}
-// 	return pkt[9]
-// }
-
-// func isHTTP(payload []byte) bool {
-// 	if len(payload) < 3 {
-// 		return false
-// 	}
-// 	// 간단 체크: 메서드로 시작하는지
-// 	methods := [][]byte{
-// 		[]byte("GET "), []byte("POST "), []byte("HEAD "), []byte("PUT "),
-// 		[]byte("DELETE "), []byte("OPTIONS "), []byte("CONNECT "), []byte("PATCH "),
-// 	}
-// 	for _, m := range methods {
-// 		if len(payload) >= len(m) && string(payload[:len(m)]) == string(m) {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
-
-// func isTLSClientHello(payload []byte) bool {
-// 	// TLS record header: 0: type(0x16=handshake), 1-2 version, 3-4 length
-// 	// Handshake header begins at payload[5], handshake type 0x01 = ClientHello
-// 	if len(payload) < 6 {
-// 		return false
-// 	}
-// 	if payload[0] != 0x16 {
-// 		return false
-// 	}
-// 	// payload[5] should be 0x01
-// 	return payload[5] == 0x01
-// }
-
-// func ipToStr(b []byte) string {
-// 	return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
-// }
-
-// func addIptableMark(src, dst string, sport, dport uint16) {
-// 	// 먼저 존재하는지 검사 (iptables -t mangle -C PREROUTING ...)
-// 	checkArgs := []string{"-t", "mangle", "-C", "PREROUTING",
-// 		"-s", src, "-d", dst, "-p", "tcp",
-// 		"--sport", fmt.Sprint(sport), "--dport", fmt.Sprint(dport),
-// 		"-j", "MARK", "--set-mark", "1",
-// 	}
-// 	if runCmdSilent("iptables", checkArgs...) == nil {
-// 		// 이미 존재
-// 		return
-// 	}
-// 	// 존재하지 않으면 삽입
-// 	insertArgs := []string{"-t", "mangle", "-I", "PREROUTING",
-// 		"-s", src, "-d", dst, "-p", "tcp",
-// 		"--sport", fmt.Sprint(sport), "--dport", fmt.Sprint(dport),
-// 		"-j", "MARK", "--set-mark", "1",
-// 	}
-// 	if err := runCmdSilent("iptables", insertArgs...); err != nil {
-// 		log.Printf("failed to add iptables mark rule: %v\n", err)
-// 	} else {
-// 		log.Printf("added iptables mark rule: %s:%d -> %s:%d\n", src, sport, dst, dport)
-// 	}
-// }
-
-// func runCmdSilent(name string, args ...string) error {
-// 	cmd := exec.Command(name, args...)
-// 	// discard output normally
-// 	cmd.Stdout = nil
-// 	cmd.Stderr = nil
-// 	return cmd.Run()
-// }
+func assemblerWorker(assemblyChan chan *assembleInput, assembler *tcpassembly.Assembler) {
+	for input := range assemblyChan {
+		assembler.Assemble(input.flow, input.tcp)
+		assembler.FlushAll()
+	}
+}

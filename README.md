@@ -8,6 +8,8 @@ AWS EC2 Ubuntu 24.04 x86_64 6.14.0-1011-aws
 ## Install mise
 ```shell
 curl https://mise.run | sh
+echo "eval \"\$(/home/ubuntu/.local/bin/mise activate bash)\"" >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ## Install go
