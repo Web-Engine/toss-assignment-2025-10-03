@@ -3,7 +3,7 @@ package detector
 import (
 	"bytes"
 	"context"
-	"toss/stream"
+	"toss/tunnel"
 )
 
 type Http11Detector struct {
@@ -25,8 +25,8 @@ var httpMethods = [][]byte{
 	[]byte("TRACE "),
 }
 
-func (detector Http11Detector) Detect(stream *stream.DuplexStream, ctx context.Context) bool {
-	peek, err := stream.Client.Reader.Peek(7)
+func (detector Http11Detector) Detect(tun *tunnel.Tunnel, ctx context.Context) bool {
+	peek, err := tun.Downstream.Reader.Peek(7)
 	if err != nil {
 		return false
 	}

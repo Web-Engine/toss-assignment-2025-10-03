@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"io"
-	"toss/stream"
+	"toss/tunnel"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -14,19 +14,19 @@ func NewPipeHandler() *PipeHandler {
 	return &PipeHandler{}
 }
 
-func (handler *PipeHandler) Handle(stream *stream.DuplexStream) error {
+func (handler *PipeHandler) Handle(tun *tunnel.Tunnel) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	g.Go(func() error { return pipe(stream.Client, stream.Server) })
-	g.Go(func() error { return pipe(stream.Server, stream.Client) })
+	g.Go(func() error { return pipe(tun.Downstream, tun.Upstream) })
+	g.Go(func() error { return pipe(tun.Upstream, tun.Downstream) })
 
 	return g.Wait()
 }
 
-func pipe(from, to *stream.Stream) error {
+func pipe(from, to *tunnel.Stream) error {
 	if n := from.Reader.Buffered(); n > 0 {
 		peeked, err := from.Reader.Peek(n)
 		if err != nil {

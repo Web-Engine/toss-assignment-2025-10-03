@@ -3,7 +3,7 @@ package detector
 import (
 	"bytes"
 	"context"
-	"toss/stream"
+	"toss/tunnel"
 )
 
 var clientHelloHeaderBytes = []byte{0x16, 0x03, 0x01}
@@ -15,8 +15,8 @@ func NewTlsDetector() *TlsDetector {
 	return &TlsDetector{}
 }
 
-func (detector *TlsDetector) Detect(stream *stream.DuplexStream, ctx context.Context) bool {
-	buffer, err := stream.Client.Reader.Peek(3)
+func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) bool {
+	buffer, err := tun.Downstream.Reader.Peek(3)
 	if err != nil {
 		return false
 	}

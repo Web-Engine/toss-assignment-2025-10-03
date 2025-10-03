@@ -8,9 +8,10 @@ import (
 	"net"
 	"syscall"
 	"time"
-	"toss/stream"
-	"toss/stream/detector"
-	"toss/stream/handler"
+	"toss/cert"
+	"toss/tunnel"
+	"toss/tunnel/detector"
+	"toss/tunnel/handler"
 )
 
 const (
@@ -19,7 +20,15 @@ const (
 	connDeadline = 5 * time.Minute  // 전체 connection deadline
 )
 
+var certManager *cert.Manager
+
 func main() {
+	cm, err := cert.NewCertManager("./tls/rootCA.pem", "./tls/rootCA.key")
+	if err != nil {
+		log.Fatalf("create cert manager: %v", err)
+	}
+	certManager = cm
+
 	listenConfig := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			var err error
@@ -93,71 +102,50 @@ func handleConnection(clientConn net.Conn) {
 	_ = clientTcpConn.SetNoDelay(true)
 	_ = serverTcpConn.SetNoDelay(true)
 
-	duplexStream := stream.NewDuplexStreamFromConn(clientTcpConn, serverTcpConn)
-	defer duplexStream.Close()
+	tun := tunnel.NewTunnelFromConn(clientTcpConn, serverTcpConn)
+	defer tun.Close()
 
-	_ = duplexStream.Client.Conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	_ = duplexStream.Server.Conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_ = tun.Downstream.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_ = tun.Upstream.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 
-	clientPeek, _ := duplexStream.Client.Reader.Peek(1)
-	serverPeek, _ := duplexStream.Server.Reader.Peek(1)
+	clientPeek, _ := tun.Downstream.Reader.Peek(1)
+	serverPeek, _ := tun.Upstream.Reader.Peek(1)
 
-	_ = duplexStream.Client.Conn.SetReadDeadline(time.Time{})
-	_ = duplexStream.Server.Conn.SetReadDeadline(time.Time{})
+	_ = tun.Downstream.SetReadDeadline(time.Time{})
+	_ = tun.Upstream.SetReadDeadline(time.Time{})
 
 	if len(clientPeek) > 0 {
-		log.Printf("Client first protocol received")
-		// Client-first protocol
-		err = handleClientFirstProtocol(duplexStream)
+		log.Printf("Downstream first protocol received")
+		// Downstream-first protocol
+		err = handleClientFirstProtocol(tun)
 	} else if len(serverPeek) > 0 {
-		// Server-first protocol
-		log.Printf("Server first protocol received")
-		err = handleServerFirstProtocol(duplexStream)
+		// Upstream-first protocol
+		log.Printf("Upstream first protocol received")
+		err = handleServerFirstProtocol(tun)
 	} else {
 		// Loop again? or something
 		// TODO
 	}
 
 	if err != nil {
-		log.Printf("Error processing stream: %v", err)
+		log.Printf("Error processing tunnel: %v", err)
 	}
 }
 
-func handleClientFirstProtocol(duplex *stream.DuplexStream) error {
-	protocols := []struct {
-		detector stream.Detector
-		handler  stream.Handler
-	}{
-		{detector: detector.NewHttp11Detector(), handler: handler.NewHttp11Handler()},
-		{detector: detector.NewHttp2Detector(), handler: handler.NewHttp2Handler()},
-		{detector: detector.NewTlsDetector(), handler: handler.NewTlsHandler()},
+func handleClientFirstProtocol(tun *tunnel.Tunnel) error {
+	protocols := []handler.ProtocolHandler{
+		{Detector: detector.NewHttp11Detector(), Handler: handler.NewHttp11Handler()},
+		{Detector: detector.NewHttp2Detector(), Handler: handler.NewHttp2Handler()},
+		{Detector: detector.NewTlsDetector(), Handler: handler.NewTlsHandler(certManager.GetCertificate)},
 	}
 
-	var streamHandler stream.Handler
+	tunHandler := handler.NewClientFirstHandler(protocols)
 
-	if err := duplex.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
-		return err
-	}
-
-	for _, protocol := range protocols {
-		if protocol.detector.Detect(duplex, context.Background()) {
-			streamHandler = protocol.handler
-		}
-	}
-
-	if err := duplex.SetReadDeadline(time.Time{}); err != nil {
-		return err
-	}
-
-	if streamHandler == nil {
-		streamHandler = handler.NewPipeHandler()
-	}
-
-	return streamHandler.Handle(duplex)
+	return tunHandler.Handle(tun)
 }
 
-func handleServerFirstProtocol(duplex *stream.DuplexStream) error {
+func handleServerFirstProtocol(tun *tunnel.Tunnel) error {
 	pipe := handler.NewPipeHandler()
 
-	return pipe.Handle(duplex)
+	return pipe.Handle(tun)
 }
