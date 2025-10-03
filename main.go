@@ -17,20 +17,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	queue, err := nfq.NewNFQueue(1, 100, nfq.NF_DEFAULT_PACKET_SIZE)
-	if err != nil {
-		log.Fatalf("failed to create nfqueue: %v", err)
+	queues := make([]*nfq.NFQueue, numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		queue, err := nfq.NewNFQueue(uint16(i), 100, nfq.NF_DEFAULT_PACKET_SIZE)
+		if err != nil {
+			log.Panicf("Failed to create queue(%v): %v", i, err)
+		}
+
+		defer queue.Close()
+		queues[i] = queue
 	}
-	defer queue.Close()
 
 	log.Printf("nfqueue started")
 	var wg sync.WaitGroup
 
-	packetChan := queue.GetPackets()
+	//packetChan := queue.GetPackets()
 
-	for i := 1; i <= numWorkers; i++ {
+	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go worker(packetChan, ctx, &wg)
+		go worker(queues[i], ctx, &wg)
 	}
 
 	// Wait exit signal
@@ -40,9 +45,11 @@ func main() {
 	wg.Wait()
 }
 
-func worker(packetChan <-chan nfq.NFPacket, ctx context.Context, wg *sync.WaitGroup) {
+func worker(queue *nfq.NFQueue, ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	log.Printf("worker started")
+
+	packetChan := queue.GetPackets()
 
 	for {
 		select {
