@@ -76,7 +76,7 @@ func (handler *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 	case "http/1.1":
 		streamHandler = NewHttp11Handler()
 	default:
-		streamHandler = NewPipeHandler()
+		streamHandler = NewByPassHandler()
 	}
 
 	tlsTun := tunnel.NewTunnelFromConn(downstreamTlsConn, upstreamTlsConn)

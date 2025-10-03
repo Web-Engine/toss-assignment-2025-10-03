@@ -2,7 +2,6 @@ package detector
 
 import (
 	"context"
-	"log"
 	"toss/tunnel"
 )
 
@@ -270,8 +269,6 @@ func (detector *TlsDetector) Detect(tun *tunnel.Tunnel, ctx context.Context) boo
 			serverNameList = append(serverNameList, serverName)
 		}
 	}
-
-	log.Printf("server name: %v", serverNameList)
 
 	return true
 }

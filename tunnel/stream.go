@@ -21,6 +21,7 @@ func NewStream(conn net.Conn) *Stream {
 	}
 }
 
+// region net.Conn
 func (s Stream) Read(b []byte) (n int, err error) {
 	return s.Reader.Read(b)
 }
@@ -58,3 +59,5 @@ func (s Stream) SetReadDeadline(t time.Time) error {
 func (s Stream) SetWriteDeadline(t time.Time) error {
 	return s.Conn.SetWriteDeadline(t)
 }
+
+// endregion

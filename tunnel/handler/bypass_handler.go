@@ -8,13 +8,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type PipeHandler struct{}
+type ByPassHandler struct{}
 
-func NewPipeHandler() *PipeHandler {
-	return &PipeHandler{}
+func NewByPassHandler() *ByPassHandler {
+	return &ByPassHandler{}
 }
 
-func (handler *PipeHandler) Handle(tun *tunnel.Tunnel) error {
+func (handler *ByPassHandler) Handle(tun *tunnel.Tunnel) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

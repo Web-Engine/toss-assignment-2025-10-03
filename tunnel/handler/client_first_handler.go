@@ -39,7 +39,7 @@ func (c ClientFirstHandler) Handle(tun *tunnel.Tunnel) error {
 	}
 
 	if streamHandler == nil {
-		streamHandler = NewPipeHandler()
+		streamHandler = NewByPassHandler()
 	}
 
 	return streamHandler.Handle(tun)

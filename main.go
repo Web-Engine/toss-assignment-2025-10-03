@@ -4,8 +4,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"io"
+	"log/slog"
 	"net"
+	"os"
 	"syscall"
 	"time"
 	"toss/cert"
@@ -15,20 +17,52 @@ import (
 )
 
 const (
-	listenAddr   = ":3129"          // TPROXY 대상으로 고정
-	dialTimeout  = 10 * time.Second // 원래 목적지로 dialing timeout
-	connDeadline = 5 * time.Minute  // 전체 connection deadline
+	listenAddr  = ":3129"
+	dialTimeout = 10 * time.Second
 )
 
 var certManager *cert.Manager
 
 func main() {
-	cm, err := cert.NewCertManager("./tls/rootCA.pem", "./tls/rootCA.key")
-	if err != nil {
-		log.Fatalf("create cert manager: %v", err)
-	}
-	certManager = cm
+	var err error
+	initLogger()
 
+	certManager, err = cert.NewCertManager("./tls/rootCA.pem", "./tls/rootCA.key")
+	if err != nil {
+		slog.Error("init cert manager", slog.Any("error", err))
+		return
+	}
+
+	listener, err := initListener()
+	if err != nil {
+		slog.Error("init listener", slog.Any("error", err))
+		return
+	}
+
+	defer listener.Close()
+
+	slog.Info(fmt.Sprintf("listening on %s", listener.Addr()))
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			slog.Error("accept", slog.Any("error", err))
+			continue
+		}
+
+		go handleConnection(conn)
+	}
+}
+
+func initLogger() {
+	slogJsonHandler := slog.NewJSONHandler(os.Stdout, nil)
+	logger := slog.New(slogJsonHandler)
+
+	slog.SetDefault(logger)
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+}
+
+func initListener() (net.Listener, error) {
 	listenConfig := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			var err error
@@ -41,96 +75,73 @@ func main() {
 	}
 
 	listener, err := listenConfig.Listen(context.Background(), "tcp", listenAddr)
-	if err != nil {
-		log.Fatalf("listen %s: %v", listenAddr, err)
-	}
-	defer listener.Close()
 
-	log.Printf("tproxy-bypass (no-flags) listening on %s", listenAddr)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("accept error: %v", err)
-			continue
-		}
-
-		go handleConnection(conn)
-	}
+	return listener, err
 }
 
-func handleConnection(clientConn net.Conn) {
-	defer clientConn.Close()
-	_ = clientConn.SetDeadline(time.Now().Add(connDeadline))
+func handleConnection(downstreamConn net.Conn) {
+	defer downstreamConn.Close()
 
-	localAddr := clientConn.LocalAddr()
-	tcpLocal, ok := localAddr.(*net.TCPAddr)
-	if !ok {
-		log.Printf("unsupported local addr type: %T from %v", localAddr, clientConn.RemoteAddr())
-		return
-	}
+	srcAddr := downstreamConn.RemoteAddr()
+	dstAddr := downstreamConn.LocalAddr()
 
-	originalIP := tcpLocal.IP
-	originalPort := tcpLocal.Port
-	if originalIP == nil || originalPort == 0 {
-		log.Printf("cannot determine original destination from LocalAddr=%v", localAddr)
-		return
-	}
+	logger := slog.Default().With(
+		slog.Any("src", srcAddr),
+		slog.Any("dst", dstAddr),
+	)
 
-	target := net.JoinHostPort(originalIP.String(), fmt.Sprintf("%d", originalPort))
-	log.Printf("clientConn %s -> original %s", clientConn.RemoteAddr(), target)
+	logger.Debug(fmt.Sprintf("connection request: %v -> %v", srcAddr, dstAddr))
 
-	serverConn, err := net.DialTimeout("tcp", target, dialTimeout)
+	upstreamConn, err := net.DialTimeout("tcp", dstAddr.String(), dialTimeout)
 	if err != nil {
-		log.Printf("dial original %s failed: %v", target, err)
+		logger.Error("failed to dial to dst", slog.Any("error", err))
 		return
 	}
-	defer serverConn.Close()
+	defer upstreamConn.Close()
 
-	clientTcpConn, ok := clientConn.(*net.TCPConn)
+	downstreamTCPConn, ok := downstreamConn.(*net.TCPConn)
 	if !ok {
-		log.Printf("TCP local connection expected: %T from %v", clientConn, clientConn.RemoteAddr())
+		logger.Error("downstream connection is not tcp")
 		return
 	}
 
-	serverTcpConn, ok := serverConn.(*net.TCPConn)
+	upstreamTCPConn, ok := upstreamConn.(*net.TCPConn)
 	if !ok {
-		log.Printf("TCP forward connection expected: %T from %v", serverConn, serverConn.RemoteAddr())
+		logger.Error("upstream connection is not tcp")
 		return
 	}
 
-	_ = clientTcpConn.SetNoDelay(true)
-	_ = serverTcpConn.SetNoDelay(true)
+	_ = downstreamTCPConn.SetNoDelay(true)
+	_ = upstreamTCPConn.SetNoDelay(true)
 
-	tun := tunnel.NewTunnelFromConn(clientTcpConn, serverTcpConn)
+	tun := tunnel.NewTunnelFromConn(downstreamTCPConn, upstreamTCPConn)
 	defer tun.Close()
 
-	_ = tun.Downstream.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	_ = tun.Upstream.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-
-	clientPeek, _ := tun.Downstream.Reader.Peek(1)
-	serverPeek, _ := tun.Upstream.Reader.Peek(1)
-
-	_ = tun.Downstream.SetReadDeadline(time.Time{})
-	_ = tun.Upstream.SetReadDeadline(time.Time{})
-
-	if len(clientPeek) > 0 {
-		// Downstream-first protocol
-		err = handleClientFirstProtocol(tun)
-	} else if len(serverPeek) > 0 {
-		// Upstream-first protocol
-		err = handleServerFirstProtocol(tun)
-	} else {
-		// Loop again? or something
-		// TODO
-	}
-
-	if err != nil {
-		log.Printf("Error processing tunnel: %v", err)
-	}
+	handleTunnel(tun)
 }
 
-func handleClientFirstProtocol(tun *tunnel.Tunnel) error {
+func handleTunnel(tun *tunnel.Tunnel) {
+	for i := 0; i < 5; i++ {
+		_ = tun.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		_, _ = tun.Downstream.Reader.Peek(1)
+		_, _ = tun.Upstream.Reader.Peek(1)
+		_ = tun.SetReadDeadline(time.Time{})
+
+		if tun.Downstream.Reader.Buffered() > 0 {
+			handleClientFirstProtocol(tun)
+			return
+		}
+
+		if tun.Upstream.Reader.Buffered() > 0 {
+			handleServerFirstProtocol(tun)
+			return
+		}
+	}
+
+	slog.Error("failed to read packet")
+}
+
+func handleClientFirstProtocol(tun *tunnel.Tunnel) {
 	protocols := []handler.ProtocolHandler{
 		{Detector: detector.NewHttp11Detector(), Handler: handler.NewHttp11Handler()},
 		{Detector: detector.NewHttp2Detector(), Handler: handler.NewHttp2Handler()},
@@ -139,11 +150,15 @@ func handleClientFirstProtocol(tun *tunnel.Tunnel) error {
 
 	tunHandler := handler.NewClientFirstHandler(protocols)
 
-	return tunHandler.Handle(tun)
+	if err := tunHandler.Handle(tun); err != nil && err != io.EOF {
+		slog.Error("error occurred", slog.Any("error", err))
+	}
 }
 
-func handleServerFirstProtocol(tun *tunnel.Tunnel) error {
-	pipe := handler.NewPipeHandler()
+func handleServerFirstProtocol(tun *tunnel.Tunnel) {
+	byPassHandler := handler.NewByPassHandler()
 
-	return pipe.Handle(tun)
+	if err := byPassHandler.Handle(tun); err != nil && err != io.EOF {
+		slog.Error("error occurred", slog.Any("error", err))
+	}
 }
