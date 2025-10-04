@@ -3,6 +3,7 @@ package detector
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"toss/cert"
 	"toss/tunnel"
 	"toss/tunnel/handler"
@@ -21,7 +22,10 @@ func NewTlsDetector(logger *slog.Logger, certManager *cert.Manager) *TlsDetector
 }
 
 var (
-	allowList = []string{
+	allowIpList = []net.IP{
+		net.IPv4(1, 1, 1, 1),
+	}
+	allowDomainList = []string{
 		"www.example.com",
 		"toss.im",
 	}
@@ -39,7 +43,7 @@ const (
 	tlsNameTypeHostName = 0
 )
 
-func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
+func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
 	// TLS Record structure
 	// <5 byte> TLS Record Header
 	// <n byte> TLS Record Payload
@@ -57,33 +61,34 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 	//  - 3.2: TLS 1.1
 	//  - 3.3: TLS 1.2
 	//  - 3.4: TLS 1.3
-	// <2 byte> Length
+	// <2 byte> Record Payload Length
 	header, err := tun.Downstream.Reader.Peek(tlsRecordHeaderLen)
 	if err != nil {
-		return false, nil
+		return tunnel.DetectResultPossible, nil
 	}
 
-	if header[0] != tlsContentTypeHandshake {
-		return false, nil
-	}
-
+	tlsContentType := header[0]
 	versionMajor := header[1]
 	versionMinor := header[2]
+	payloadLen := int(header[3])<<8 | int(header[4])
+
+	if tlsContentType != tlsContentTypeHandshake {
+		return tunnel.DetectResultNever, nil
+	}
 
 	// 3.0 ~ 3.4
 	if versionMajor != 3 || versionMinor > 4 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
-	payloadLen := int(header[3])<<8 | int(header[4])
 	if payloadLen <= 0 || payloadLen > maxTlsRecordSize {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	recordLen := tlsRecordHeaderLen + payloadLen
 	record, err := tun.Downstream.Reader.Peek(recordLen)
 	if err != nil {
-		return false, nil
+		return tunnel.DetectResultPossible, nil
 	}
 
 	// Handshake Payload Structure
@@ -105,17 +110,17 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 	//   <n byte> Handshake Message
 	payload := record[tlsRecordHeaderLen:]
 	if len(payload) < 4 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	handshakeType := payload[0]
 	if handshakeType != tlsHandshakeMessageTypeClientHello {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	handshakeLen := int(payload[1])<<16 | int(payload[2])<<8 | int(payload[3])
 	if handshakeLen < 0 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	// ClientHello structure
@@ -139,7 +144,7 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 	//   <2 byte> Ext Length
 	//   <n byte> Ext Data
 	if len(payload) < 4+handshakeLen {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	clientHello := payload[4 : 4+handshakeLen]
@@ -152,12 +157,12 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 
 	// Session ID Length
 	if len(clientHello) < 1 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 	sessionIdLen := int(clientHello[0])
 	clientHello = clientHello[1:]
 	if sessionIdLen <= 0 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	// Session ID
@@ -165,12 +170,12 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 
 	// Cipher Suites Len
 	if len(clientHello) < 2 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 	cipherSuitesLen := int(clientHello[0])<<8 | int(clientHello[1])
 	clientHello = clientHello[2:]
 	if cipherSuitesLen <= 0 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	// Cipher Suites
@@ -178,12 +183,12 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 
 	// Compression Methods Len
 	if len(clientHello) < 1 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 	compressionMethodsLen := int(clientHello[0])
 	clientHello = clientHello[1:]
 	if compressionMethodsLen <= 0 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	// Compression Methods
@@ -191,28 +196,24 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 
 	// Extensions Len
 	if len(clientHello) < 2 {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	extensionsLen := int(clientHello[0])<<8 | int(clientHello[1])
 	clientHello = clientHello[2:]
 	if extensionsLen <= 0 {
-		return false, nil
+		return tunnel.DetectResultMatched, handler.NewTlsHandler(d.logger, d.certManager)
 	}
 
 	// Extensions
 	if len(clientHello) < extensionsLen {
-		return false, nil
-	}
-
-	if extensionsLen != len(clientHello) {
-		return false, nil
+		return tunnel.DetectResultNever, nil
 	}
 
 	extensions := clientHello
 	var serverNameList []string
 
-	for {
+	for len(extensions) != 0 {
 		if len(extensions) < 4 {
 			break
 		}
@@ -245,7 +246,7 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 		//     <2 byte> HostName Len
 		//     <n byte> HostName
 		if len(ext) < 2 {
-			continue
+			break
 		}
 
 		serverNameListLen := int(ext[0])<<8 | int(ext[1])
@@ -254,39 +255,61 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
 		for i := 0; i < serverNameListLen; i++ {
 			// NameType
 			if len(ext) < 1 {
-				continue
+				break
 			}
 
 			nameType := int(ext[0])
-			if nameType != tlsNameTypeHostName {
-				continue
-			}
 			ext = ext[1:]
+			if nameType != tlsNameTypeHostName {
+				break
+			}
 
 			// HostName Len
 			if len(ext) < 2 {
-				continue
+				break
 			}
 			hostNameLen := int(ext[0])<<8 | int(ext[1])
 			ext = ext[2:]
 
 			if len(ext) < hostNameLen {
-				continue
+				break
 			}
 
 			serverName := string(ext[:hostNameLen])
 			serverNameList = append(serverNameList, serverName)
 		}
+		break
 	}
 
-	for _, serverName := range serverNameList {
-		for _, allowServerName := range allowList {
-			if serverName == allowServerName {
-				slog.Info(fmt.Sprintf("%v in allowed list: bypass", serverName))
-				return true, handler.NewByPassHandler(d.logger)
+	dstTcpAddr, ok := tun.Dst.(*net.TCPAddr)
+	if ok {
+		for _, allowIp := range allowIpList {
+			if dstTcpAddr.IP.Equal(allowIp) {
+				slog.Info(fmt.Sprintf("%v in allowed ip list: bypass", dstTcpAddr))
+				byPassLogger := d.logger.With(
+					"bypass-by", "TlsDetector",
+					"allowed-ip", dstTcpAddr.String(),
+				)
+
+				return tunnel.DetectResultMatched, handler.NewByPassHandler(byPassLogger)
 			}
 		}
 	}
 
-	return true, handler.NewTlsHandler(d.logger, d.certManager)
+	for _, allowServerName := range allowDomainList {
+		for _, serverName := range serverNameList {
+			if serverName == allowServerName {
+				slog.Info(fmt.Sprintf("%v in allowed domain list: bypass", serverName))
+				byPassLogger := d.logger.With(
+					"bypass-by", "TlsDetector",
+					"tlsServerNameList", serverNameList,
+					"matchedServerName", serverName,
+				)
+				return tunnel.DetectResultMatched, handler.NewByPassHandler(byPassLogger)
+			}
+		}
+	}
+
+	nextLogger := d.logger.With("tlsServerNameList", serverNameList)
+	return tunnel.DetectResultMatched, handler.NewTlsHandler(nextLogger, d.certManager)
 }

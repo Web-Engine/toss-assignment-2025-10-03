@@ -55,11 +55,12 @@ func main() {
 }
 
 func initLogger() {
-	slogJsonHandler := slog.NewJSONHandler(os.Stdout, nil)
+	slogJsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
 	logger := slog.New(slogJsonHandler)
 
 	slog.SetDefault(logger)
-	slog.SetLogLoggerLevel(slog.LevelDebug)
 }
 
 func initListener() (net.Listener, error) {
@@ -114,7 +115,7 @@ func handleConnection(downstreamConn net.Conn) {
 	_ = downstreamTCPConn.SetNoDelay(true)
 	_ = upstreamTCPConn.SetNoDelay(true)
 
-	tun := tunnel.NewTunnelFromConn(downstreamTCPConn, upstreamTCPConn)
+	tun := tunnel.NewTunnelFromConn(srcAddr, dstAddr, downstreamTCPConn, upstreamTCPConn)
 	defer tun.Close()
 
 	logger = slog.Default().With(
@@ -130,24 +131,30 @@ func handleConnection(downstreamConn net.Conn) {
 }
 
 func handleTunnel(tun *tunnel.Tunnel, logger *slog.Logger) {
+	logger.Debug("tunnel handling start")
+
 	for i := 0; i < 5; i++ {
+		logger.Debug("Try to detect client-side or server-side first protocol")
+
 		_ = tun.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 		_, _ = tun.Downstream.Reader.Peek(1)
 		_, _ = tun.Upstream.Reader.Peek(1)
 		_ = tun.SetReadDeadline(time.Time{})
 
 		if tun.Downstream.Reader.Buffered() > 0 {
+			logger.Debug("client-side first protocol detected")
 			handleClientFirstProtocol(tun, logger)
 			return
 		}
 
 		if tun.Upstream.Reader.Buffered() > 0 {
+			logger.Debug("server-side first protocol detected")
 			handleServerFirstProtocol(tun, logger)
 			return
 		}
 	}
 
-	slog.Error("failed to read packet")
+	logger.Error("failed to read packet")
 }
 
 func handleClientFirstProtocol(tun *tunnel.Tunnel, logger *slog.Logger) {
@@ -160,7 +167,7 @@ func handleClientFirstProtocol(tun *tunnel.Tunnel, logger *slog.Logger) {
 	detectHandler := handler.NewDetectHandler(logger, detectors)
 
 	if err := detectHandler.Handle(tun); err != nil && err != io.EOF {
-		logger.Error("error occurred", slog.Any("error", err))
+		logger.Error("error occurred", "error", err, "stack", err.Error())
 	}
 }
 

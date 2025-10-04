@@ -47,7 +47,7 @@ func (h *Http11Handler) Handle(tun *tunnel.Tunnel) error {
 			slog.Any("body", reqBodyPreview.String()),
 		)
 
-		logger.Info("http request", slogReq)
+		logger.Info("http1.1 request", slogReq)
 
 		res, err := http.ReadResponse(tun.Upstream.Reader, req)
 		if err != nil {
@@ -72,7 +72,7 @@ func (h *Http11Handler) Handle(tun *tunnel.Tunnel) error {
 			slog.Any("body", resBodyPreview.String()),
 		)
 
-		logger.Info("http response", slogReq, slogRes)
+		logger.Info("http1.1 response", slogReq, slogRes)
 
 		connectionHeader := strings.ToLower(res.Header.Get("Connection"))
 		upgradeHeader := strings.ToLower(res.Header.Get("Upgrade"))

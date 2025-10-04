@@ -29,17 +29,17 @@ var httpMethods = [][]byte{
 	[]byte("TRACE "),
 }
 
-func (d Http11Detector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
+func (d Http11Detector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
 	peek, err := tun.Downstream.Reader.Peek(7)
 	if err != nil {
-		return false, nil
+		return tunnel.DetectResultPossible, nil
 	}
 
 	for _, method := range httpMethods {
 		if bytes.Equal(method, peek[:len(method)]) {
-			return true, handler.NewHttp11Handler(d.logger)
+			return tunnel.DetectResultMatched, handler.NewHttp11Handler(d.logger)
 		}
 	}
 
-	return false, nil
+	return tunnel.DetectResultNever, nil
 }

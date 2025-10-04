@@ -19,11 +19,19 @@ func NewHttp2Detector(logger *slog.Logger) *Http2Detector {
 
 var http2Preface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 
-func (d *Http2Detector) Detect(tun *tunnel.Tunnel) (bool, tunnel.Handler) {
-	buffer, err := tun.Downstream.Reader.Peek(len(http2Preface))
-	if err != nil {
-		return false, nil
+func (d *Http2Detector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
+	if tun.Downstream.Reader.Buffered() < len(http2Preface) {
+		return tunnel.DetectResultPossible, nil
 	}
 
-	return bytes.Equal(buffer, http2Preface), handler.NewHttp2Handler(d.logger)
+	buffer, err := tun.Downstream.Reader.Peek(len(http2Preface))
+	if err != nil {
+		return tunnel.DetectResultNever, nil
+	}
+
+	if !bytes.Equal(buffer, http2Preface) {
+		return tunnel.DetectResultNever, nil
+	}
+
+	return tunnel.DetectResultMatched, handler.NewHttp2Handler(d.logger)
 }

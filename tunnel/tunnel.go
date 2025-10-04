@@ -9,22 +9,31 @@ import (
 )
 
 type Tunnel struct {
+	Src net.Addr
+	Dst net.Addr
+
 	Downstream *Stream
 	Upstream   *Stream
 
 	id string
 }
 
-func NewTunnel(downstream, upstream *Stream) *Tunnel {
+func NewTunnel(src, dst net.Addr, downstream, upstream *Stream) *Tunnel {
 	return &Tunnel{
+		Src: src,
+		Dst: dst,
+
 		Downstream: downstream,
 		Upstream:   upstream,
 
 		id: uuid.NewString(),
 	}
 }
-func NewTunnelFromConn(downstream, upstream net.Conn) *Tunnel {
+func NewTunnelFromConn(src, dst net.Addr, downstream, upstream net.Conn) *Tunnel {
 	return &Tunnel{
+		Src: src,
+		Dst: dst,
+		
 		Downstream: NewStream(downstream),
 		Upstream:   NewStream(upstream),
 

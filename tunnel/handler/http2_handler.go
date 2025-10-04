@@ -59,7 +59,7 @@ func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 			slog.Any("headers", req.Header),
 			slog.Any("body", reqBodyPreview.String()),
 		)
-		logger.Info("http request", slogReq)
+		logger.Info("h2 request", slogReq)
 
 		for k, vv := range res.Header {
 			for _, v := range vv {
@@ -84,7 +84,7 @@ func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 			slog.Any("body", resBodyPreview.String()),
 		)
 
-		logger.Info("http response", slogReq, slogRes)
+		logger.Info("h2 response", slogReq, slogRes)
 	})
 
 	downstreamH2ServerOpts := &http2.ServeConnOpts{

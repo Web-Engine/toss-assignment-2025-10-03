@@ -28,14 +28,8 @@ func (h *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 		upstreamNegotiated string
 	)
 
-	logger.Debug("start tls handshake")
-
 	downstreamConfig := &tls.Config{
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
-			crt, err := h.certManager.GetCertificate(info)
-			if err != nil {
-				return nil, err
-			}
 
 			upstreamConfig := &tls.Config{
 				NextProtos: info.SupportedProtos,
@@ -45,16 +39,22 @@ func (h *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 				upstreamConfig.ServerName = info.ServerName
 			}
 
+			logger.Debug("upstream tls handshake start")
 			conn := tls.Client(tun.Upstream, upstreamConfig)
 			if err := conn.Handshake(); err != nil {
 				return nil, err
 			}
 
 			negotiated := conn.ConnectionState().NegotiatedProtocol
-			logger.Debug("upstream negotiated", "negotiated", negotiated)
+			logger.Debug("upstream tls handshake done", "negotiated", negotiated)
 
 			upstreamTlsConn = conn
 			upstreamNegotiated = negotiated
+
+			crt, err := h.certManager.GetCertificate(info)
+			if err != nil {
+				return nil, err
+			}
 
 			cfg := &tls.Config{
 				Certificates: []tls.Certificate{*crt},
@@ -67,13 +67,14 @@ func (h *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 		},
 	}
 
+	logger.Debug("downstream tls handshake start")
 	downstreamTlsConn := tls.Server(tun.Downstream, downstreamConfig)
 	if err := downstreamTlsConn.Handshake(); err != nil {
 		return err
 	}
 
 	downstreamNegotiated := downstreamTlsConn.ConnectionState().NegotiatedProtocol
-	logger.Debug("downstream negotiated", "negotiated", downstreamNegotiated)
+	logger.Debug("downstream tls handshake done", "negotiated", downstreamNegotiated)
 
 	if downstreamNegotiated != upstreamNegotiated {
 		return fmt.Errorf("ALPN mismatch: downstream=%s upstream=%s", downstreamNegotiated, upstreamNegotiated)
@@ -89,6 +90,6 @@ func (h *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 		streamHandler = NewByPassHandler(h.logger)
 	}
 
-	tlsTun := tunnel.NewTunnelFromConn(downstreamTlsConn, upstreamTlsConn)
+	tlsTun := tunnel.NewTunnelFromConn(tun.Src, tun.Dst, downstreamTlsConn, upstreamTlsConn)
 	return streamHandler.Handle(tlsTun)
 }
