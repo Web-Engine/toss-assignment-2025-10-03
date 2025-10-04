@@ -445,14 +445,16 @@ $ curl https://1.1.1.1 -s -v -o /dev/null
 ## 고려했던 문제점 및 해결 방안
 
 ### Server-side first protocol
- - 일반적인 프로토콜에서는 TCP 3-way handshake 이후 클라이언트가 메세지를 먼저 전송하지만, 특수한 프로토콜은 서버에서 클라이언트로 메세지를 먼저 전송하는 경우가 있습니다. (MySQL Server Greeting)
- - 이 경우에, Client 쪽 패킷이 수신 될 때 까지 대기하는 경우 문제가 발생할 수 있습니다. 
- - 서버 측 패킷과 클라이언트 패킷 중 먼저 도착한 패킷에 따라 프로토콜을 분류하여 해결했습니다.
+일반적인 프로토콜에서는 TCP 3-way handshake 이후 클라이언트가 메세지를 먼저 전송하지만, 특수한 프로토콜은 서버에서 클라이언트로 메세지를 먼저 전송하는 경우가 있습니다. (MySQL Server Greeting)<br />
+이 경우에, Client 쪽 패킷이 수신 될 때 까지 대기하는 경우 문제가 발생할 수 있습니다.<br />
+<br />
+서버 측 패킷과 클라이언트 패킷 중 먼저 도착한 패킷에 따라 프로토콜을 분류하여 해결했습니다.
 
 ### WebSocket 처리
- - WebSocket은 일반적으로 HTTP1.1 에서 업그레이드하는 방식으로 연결합니다.
- - 따라서 WebSocket에 대한 예외 처리를 진행하지 않으면 WebSocket으로 전환 된 이후에도 HTTP1.1 로 해석하려고 시도하면서 문제가 발생 할 수 있습니다.
- - HTTP1.1의 서버 응답으로 Connection: upgrade, Upgrade: websocket 헤더를 받는 경우, WebSocket 전환으로 인식하고 별도 처리하여 해결했습니다.
+WebSocket은 일반적으로 HTTP1.1 에서 업그레이드하는 방식으로 연결합니다.<br />
+따라서 WebSocket에 대한 예외 처리를 진행하지 않으면 WebSocket으로 전환 된 이후에도 HTTP1.1 로 해석하려고 시도하면서 문제가 발생 할 수 있습니다.<br />
+<br />
+HTTP1.1의 서버 응답으로 Connection: upgrade, Upgrade: websocket 헤더를 받는 경우, WebSocket 전환으로 인식하고 별도 처리하여 해결했습니다.
 
 ## 개선 및 확장 방안
 
