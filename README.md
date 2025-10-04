@@ -121,22 +121,160 @@ Application에서 발생하는 다양한 로그를 기록합니다.
 ```shell
 # HTTP/1.1
 curl http://www.naver.com -s -v -o /dev/null
-# on windows pwsh
-#   curl.exe http://www.naver.com -s -v -o NUL
 
 # HTTPS/1.1
 curl https://www.naver.com -s -v --http1.1 -o /dev/null
-# on windows pwsh
-#   curl.exe https://www.naver.com -s -v --http1.1 -o NUL
 
 # HTTPS/2
 curl https://www.naver.com -s -v --http2 -o /dev/null
-# on windows pwsh
-#   curl.exe https://www.naver.com -s -v --http2 -o NUL
 ```
 
 #### 테스트 결과
 ```shell
+# HTTP/1.1
+$ curl http://www.naver.com -s -v -o /dev/null
+*   Trying 223.130.200.219:80...
+* Connected to www.naver.com (223.130.200.219) port 80 (#0)
+> GET / HTTP/1.1
+> Host: www.naver.com
+> User-Agent: curl/7.80.0
+> Accept: */*
+>
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 302 Moved Temporarily
+< Transfer-Encoding: chunked
+< Content-Type: text/html
+< Date: Sat, 04 Oct 2025 07:50:38 GMT
+< Location: https://www.naver.com/
+< Referrer-Policy: unsafe-url
+< Server: nfront
+< Vary: Accept-Encoding,User-Agent
+<
+{ [149 bytes data]
+* Connection #0 to host www.naver.com left intact
+
+
+# HTTPS/1.1
+$ curl https://www.naver.com -s -v --http1.1 -o /dev/null
+*   Trying 223.130.200.219:443...
+* Connected to www.naver.com (223.130.200.219) port 443 (#0)
+* ALPN, offering http/1.1
+*  CAfile: C:/Program Files/Git/mingw64/ssl/certs/ca-bundle.crt
+*  CApath: none
+} [5 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+} [512 bytes data]
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+{ [25 bytes data]
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+{ [1207 bytes data]
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+{ [264 bytes data]
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+{ [36 bytes data]
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+} [1 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+} [36 bytes data]
+* SSL connection using TLSv1.3 / TLS_AES_128_GCM_SHA256
+* ALPN, server accepted to use http/1.1
+* Server certificate:
+*  subject: O=Toss VPN; OU=Wein Cho; CN=www.naver.com
+*  start date: Oct  4 07:46:00 2025 GMT
+*  expire date: Jan  2 07:46:00 2026 GMT
+*  subjectAltName: host "www.naver.com" matched cert's "www.naver.com"
+*  issuer: C=KR; ST=Seoul; O=Toss; OU=Wein; CN=WeinCA; emailAddress=gsts007@gmail.com
+*  SSL certificate verify ok.
+} [5 bytes data]
+> GET / HTTP/1.1
+> Host: www.naver.com
+> User-Agent: curl/7.80.0
+> Accept: */*
+>
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [122 bytes data]
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 200 OK
+< Transfer-Encoding: chunked
+< Cache-Control: no-cache, no-store, must-revalidate
+< Content-Type: text/html; charset=UTF-8
+< Date: Sat, 04 Oct 2025 07:51:00 GMT
+< Pragma: no-cache
+< Referrer-Policy: unsafe-url
+< Server: nfront
+< Strict-Transport-Security: max-age=63072000; includeSubdomains
+< X-Frame-Options: DENY
+< X-Xss-Protection: 1; mode=block
+<
+{ [827 bytes data]
+* Connection #0 to host www.naver.com left intact
+
+# HTTPS/2
+$ curl https://www.naver.com -s -v --http2 -o /dev/null
+*   Trying 223.130.200.219:443...
+* Connected to www.naver.com (223.130.200.219) port 443 (#0)
+* ALPN, offering h2
+* ALPN, offering http/1.1
+*  CAfile: C:/Program Files/Git/mingw64/ssl/certs/ca-bundle.crt
+*  CApath: none
+} [5 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+} [512 bytes data]
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+{ [19 bytes data]
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+{ [1208 bytes data]
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+{ [264 bytes data]
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+{ [36 bytes data]
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+} [1 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+} [36 bytes data]
+* SSL connection using TLSv1.3 / TLS_AES_128_GCM_SHA256
+* ALPN, server accepted to use h2
+* Server certificate:
+*  subject: O=Toss VPN; OU=Wein Cho; CN=www.naver.com
+*  start date: Oct  4 07:46:40 2025 GMT
+*  expire date: Jan  2 07:46:40 2026 GMT
+*  subjectAltName: host "www.naver.com" matched cert's "www.naver.com"
+*  issuer: C=KR; ST=Seoul; O=Toss; OU=Wein; CN=WeinCA; emailAddress=gsts007@gmail.com
+*  SSL certificate verify ok.
+* Using HTTP2, server supports multiplexing
+* Connection state changed (HTTP/2 confirmed)
+* Copying HTTP/2 data in stream buffer to connection buffer after upgrade: len=0
+} [5 bytes data]
+* Using Stream ID: 1 (easy handle 0x1b6f9942080)
+} [5 bytes data]
+> GET / HTTP/2
+> Host: www.naver.com
+> user-agent: curl/7.80.0
+> accept: */*
+>
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [122 bytes data]
+* Connection state changed (MAX_CONCURRENT_STREAMS == 250)!
+} [5 bytes data]
+< HTTP/2 200 
+< cache-control: no-cache, no-store, must-revalidate
+< content-type: text/html; charset=UTF-8
+< date: Sat, 04 Oct 2025 07:51:40 GMT
+< pragma: no-cache
+< referrer-policy: unsafe-url
+< server: nfront
+< strict-transport-security: max-age=63072000; includeSubdomains
+< x-frame-options: DENY
+< x-xss-protection: 1; mode=block
+<
+{ [5 bytes data]
+* Connection #0 to host www.naver.com left intact
 ```
 
 ### 2. WebSocket 테스트

@@ -44,6 +44,8 @@ const (
 )
 
 func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
+	logger := d.logger.With("context", "TlsDetector")
+
 	// TLS Record structure
 	// <5 byte> TLS Record Header
 	// <n byte> TLS Record Payload
@@ -64,6 +66,7 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 	// <2 byte> Record Payload Length
 	header, err := tun.Downstream.Reader.Peek(tlsRecordHeaderLen)
 	if err != nil {
+		logger.Debug("tls protocol: possible: failed to peek tls record header (buffer maybe not ready)")
 		return tunnel.DetectResultPossible, nil
 	}
 
@@ -73,21 +76,25 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 	payloadLen := int(header[3])<<8 | int(header[4])
 
 	if tlsContentType != tlsContentTypeHandshake {
+		logger.Debug("tls protocol: never: tls content type mismatch", "tlsContentType", tlsContentType)
 		return tunnel.DetectResultNever, nil
 	}
 
 	// 3.0 ~ 3.4
 	if versionMajor != 3 || versionMinor > 4 {
+		logger.Debug("tls protocol: never: tls version mismatch", "tlsVersionMajor", versionMajor, "tlsVersionMinor", versionMinor)
 		return tunnel.DetectResultNever, nil
 	}
 
 	if payloadLen <= 0 || payloadLen > maxTlsRecordSize {
+		logger.Debug("tls protocol: never: wrong payload length", "payloadLength", payloadLen)
 		return tunnel.DetectResultNever, nil
 	}
 
 	recordLen := tlsRecordHeaderLen + payloadLen
 	record, err := tun.Downstream.Reader.Peek(recordLen)
 	if err != nil {
+		logger.Debug("tls protocol: possible: failed to peek record (buffer maybe not ready)")
 		return tunnel.DetectResultPossible, nil
 	}
 
@@ -110,16 +117,19 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 	//   <n byte> Handshake Message
 	payload := record[tlsRecordHeaderLen:]
 	if len(payload) < 4 {
+		logger.Debug("tls protocol: never: wrong payload slice length")
 		return tunnel.DetectResultNever, nil
 	}
 
 	handshakeType := payload[0]
 	if handshakeType != tlsHandshakeMessageTypeClientHello {
+		logger.Debug("tls protocol: never: handshake type mismatch", "handshakeType", handshakeType)
 		return tunnel.DetectResultNever, nil
 	}
 
 	handshakeLen := int(payload[1])<<16 | int(payload[2])<<8 | int(payload[3])
 	if handshakeLen < 0 {
+		logger.Debug("tls protocol: never: wrong handshake length", "handshakeLength", handshakeLen)
 		return tunnel.DetectResultNever, nil
 	}
 
@@ -144,6 +154,7 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 	//   <2 byte> Ext Length
 	//   <n byte> Ext Data
 	if len(payload) < 4+handshakeLen {
+		logger.Debug("tls protocol: never: payload slice less than handshake length", "handshakeLength", handshakeLen)
 		return tunnel.DetectResultNever, nil
 	}
 
@@ -157,11 +168,13 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 
 	// Session ID Length
 	if len(clientHello) < 1 {
+		logger.Debug("tls protocol: never: wrong clientHello slice length")
 		return tunnel.DetectResultNever, nil
 	}
 	sessionIdLen := int(clientHello[0])
 	clientHello = clientHello[1:]
 	if sessionIdLen <= 0 {
+		logger.Debug("tls protocol: never: wrong sessionId length", "sessionIdLength", sessionIdLen)
 		return tunnel.DetectResultNever, nil
 	}
 
@@ -170,11 +183,13 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 
 	// Cipher Suites Len
 	if len(clientHello) < 2 {
+		logger.Debug("tls protocol: never: wrong clientHello slice length")
 		return tunnel.DetectResultNever, nil
 	}
 	cipherSuitesLen := int(clientHello[0])<<8 | int(clientHello[1])
 	clientHello = clientHello[2:]
 	if cipherSuitesLen <= 0 {
+		logger.Debug("tls protocol: never: wrong cipherSuitesLen", "cipherSuitesLen", cipherSuitesLen)
 		return tunnel.DetectResultNever, nil
 	}
 
@@ -183,11 +198,13 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 
 	// Compression Methods Len
 	if len(clientHello) < 1 {
+		logger.Debug("tls protocol: never: wrong clientHello slice length")
 		return tunnel.DetectResultNever, nil
 	}
 	compressionMethodsLen := int(clientHello[0])
 	clientHello = clientHello[1:]
 	if compressionMethodsLen <= 0 {
+		logger.Debug("tls protocol: never: wrong compressionMethodsLen", "compressionMethodsLen", compressionMethodsLen)
 		return tunnel.DetectResultNever, nil
 	}
 
@@ -196,17 +213,20 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 
 	// Extensions Len
 	if len(clientHello) < 2 {
+		logger.Debug("tls protocol: never: wrong clientHello slice length")
 		return tunnel.DetectResultNever, nil
 	}
 
 	extensionsLen := int(clientHello[0])<<8 | int(clientHello[1])
 	clientHello = clientHello[2:]
 	if extensionsLen <= 0 {
+		logger.Debug("tls protocol: matched")
 		return tunnel.DetectResultMatched, handler.NewTlsHandler(d.logger, d.certManager)
 	}
 
 	// Extensions
 	if len(clientHello) < extensionsLen {
+		logger.Debug("tls protocol: never: wrong clientHello slice length")
 		return tunnel.DetectResultNever, nil
 	}
 
@@ -281,11 +301,13 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 		break
 	}
 
+	logger.Debug("tls protocol: matched")
+
 	dstTcpAddr, ok := tun.Dst.(*net.TCPAddr)
 	if ok {
 		for _, allowIp := range allowIpList {
 			if dstTcpAddr.IP.Equal(allowIp) {
-				slog.Info(fmt.Sprintf("%v in allowed ip list: bypass", dstTcpAddr))
+				logger.Info(fmt.Sprintf("%v in allowed ip list: bypass", dstTcpAddr))
 				byPassLogger := d.logger.With(
 					"bypass-by", "TlsDetector",
 					"allowed-ip", dstTcpAddr.String(),
@@ -299,7 +321,7 @@ func (d *TlsDetector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Ha
 	for _, allowServerName := range allowDomainList {
 		for _, serverName := range serverNameList {
 			if serverName == allowServerName {
-				slog.Info(fmt.Sprintf("%v in allowed domain list: bypass", serverName))
+				logger.Info(fmt.Sprintf("%v in allowed domain list: bypass", serverName))
 				byPassLogger := d.logger.With(
 					"bypass-by", "TlsDetector",
 					"tlsServerNameList", serverNameList,

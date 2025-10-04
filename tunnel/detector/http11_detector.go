@@ -30,12 +30,11 @@ var httpMethods = [][]byte{
 }
 
 func (d Http11Detector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
-	peek, err := tun.Downstream.Reader.Peek(7)
-
 	logger := d.logger.With("context", "Http11Detector")
 
+	peek, err := tun.Downstream.Reader.Peek(7)
 	if err != nil {
-		logger.Debug("failed to peek 7 bytes: possible")
+		logger.Debug("http1.1 protocol: possible: failed to peek (buffer maybe not ready)")
 		return tunnel.DetectResultPossible, nil
 	}
 
@@ -45,6 +44,6 @@ func (d Http11Detector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.
 			return tunnel.DetectResultMatched, handler.NewHttp11Handler(d.logger)
 		}
 	}
-	logger.Debug("http1.1 protocol: unmatched", "peek", string(peek))
+	logger.Debug("http1.1 protocol: never", "peek", string(peek))
 	return tunnel.DetectResultNever, nil
 }

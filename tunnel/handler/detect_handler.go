@@ -32,7 +32,8 @@ func (h DetectHandler) Handle(tun *tunnel.Tunnel) error {
 		return err
 	}
 
-	for {
+	// TODO: context.Timeout 기반으로 변경 필요
+	for i := 0; i < 5; i++ {
 		h.logger.Debug("try to detect protocol")
 
 		resultFlag := tunnel.DetectResultNever
@@ -54,11 +55,11 @@ func (h DetectHandler) Handle(tun *tunnel.Tunnel) error {
 		if resultFlag == tunnel.DetectResultNever {
 			break
 		}
-
-		if tun.Downstream.Reader.Buffered()+tun.Upstream.Reader.Buffered() > 128 {
-			h.logger.Debug("failed to detect protocol", "downstream.buffered", tun.Downstream.Reader.Buffered(), "upstream.buffered", tun.Upstream.Reader.Buffered())
-			break
-		}
+		//
+		//if tun.Downstream.Reader.Buffered()+tun.Upstream.Reader.Buffered() > 128 {
+		//	h.logger.Debug("failed to detect protocol", "downstream.buffered", tun.Downstream.Reader.Buffered(), "upstream.buffered", tun.Upstream.Reader.Buffered())
+		//	break
+		//}
 	}
 
 	if err := tun.SetReadDeadline(time.Time{}); err != nil && err != io.EOF {

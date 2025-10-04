@@ -20,18 +20,19 @@ func NewHttp2Detector(logger *slog.Logger) *Http2Detector {
 var http2Preface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 
 func (d *Http2Detector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
-	if tun.Downstream.Reader.Buffered() < len(http2Preface) {
-		return tunnel.DetectResultPossible, nil
-	}
+	logger := d.logger.With("context", "Http11Detector")
 
-	buffer, err := tun.Downstream.Reader.Peek(len(http2Preface))
+	peek, err := tun.Downstream.Reader.Peek(len(http2Preface))
 	if err != nil {
+		logger.Debug("http2 protocol: possible: failed to peek (peek maybe not ready)")
 		return tunnel.DetectResultNever, nil
 	}
 
-	if !bytes.Equal(buffer, http2Preface) {
+	if !bytes.Equal(peek, http2Preface) {
+		logger.Debug("http2 protocol: never", "peek", string(peek))
 		return tunnel.DetectResultNever, nil
 	}
 
+	logger.Debug("http2 protocol: matched")
 	return tunnel.DetectResultMatched, handler.NewHttp2Handler(d.logger)
 }
