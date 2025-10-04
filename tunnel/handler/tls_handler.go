@@ -22,6 +22,7 @@ func NewTlsHandler(logger *slog.Logger, certManager *cert.Manager) *TlsHandler {
 
 func (h *TlsHandler) Handle(tun *tunnel.Tunnel) error {
 	logger := h.logger.With("context", "TlsHandler")
+	logger.Debug("handle TLS protocol")
 
 	var (
 		upstreamTlsConn    *tls.Conn

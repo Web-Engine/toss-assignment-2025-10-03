@@ -31,15 +31,20 @@ var httpMethods = [][]byte{
 
 func (d Http11Detector) Detect(tun *tunnel.Tunnel) (tunnel.DetectResult, tunnel.Handler) {
 	peek, err := tun.Downstream.Reader.Peek(7)
+
+	logger := d.logger.With("context", "Http11Detector")
+
 	if err != nil {
+		logger.Debug("failed to peek 7 bytes: possible")
 		return tunnel.DetectResultPossible, nil
 	}
 
 	for _, method := range httpMethods {
 		if bytes.Equal(method, peek[:len(method)]) {
+			logger.Debug("http1.1 protocol: matched", "method", string(method))
 			return tunnel.DetectResultMatched, handler.NewHttp11Handler(d.logger)
 		}
 	}
-
+	logger.Debug("http1.1 protocol: unmatched", "peek", string(peek))
 	return tunnel.DetectResultNever, nil
 }

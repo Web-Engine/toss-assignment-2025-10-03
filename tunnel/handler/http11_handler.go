@@ -22,6 +22,7 @@ func (h *Http11Handler) Handle(tun *tunnel.Tunnel) error {
 	var handler tunnel.Handler = nil
 
 	logger := h.logger.With("context", "Http11Handler")
+	logger.Debug("handle http1.1 protocol")
 
 	for {
 		req, err := http.ReadRequest(tun.Downstream.Reader)

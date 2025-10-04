@@ -102,25 +102,69 @@ Application에서 발생하는 다양한 로그를 기록합니다.
 ## 각 기능별 테스트 방법 및 결과
 
 ### 0. 사전 준비
- - VPN 서버 구축
-   - `프로젝트 빌드 및 실행 방법` 항목 참고  
- - WireGuard 클라이언트 설치
- - WireGuard 클라이언트 활성화
-   - WireGuard 클라이언트 설정파일: `./wireguard/client.conf`
-   - `Endpoint`는 구축한 서버의 Public IP로 설정
-   - `AllowedIPs`는 VPN을 사용할 IPv4 CIDR 설정 (ex. `0.0.0.0/0`)
-     - `0.0.0.0/0` 을 사용할 경우 VPN 서버에 SSH 접속이 원할하지 못할 수 있으니, VPN 서버 IP는 제외하는 것을 추천
-     - `0.0.0.0/0` 에서 특정 IP를 뺀 CIDR를 자동으로 계산해주는 사이트: https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/
-
- - WireShark 설치 및 패킷 모니터링
+ - Server
+   - VPN 서버 구축
+   - `프로젝트 빌드 및 실행 방법` 항목 참고
+ - Client
+   - CA 인증서 설치
+   - WireGuard 설치
+   - WireGuard 클라이언트 활성화
+     - WireGuard 클라이언트 설정파일: `./wireguard/client.conf`
+     - `Endpoint`는 구축한 서버의 Public IP로 설정
+     - `AllowedIPs`는 VPN으로 패킷을 보낼 IPv4 CIDR 설정 (ex. `0.0.0.0/0`)
+       - `0.0.0.0/0` 을 사용할 경우 VPN 서버에 SSH 접속이 원할하지 못할 수 있음
+       - `0.0.0.0/0` 에서 특정 IP를 뺀 CIDR를 자동으로 계산해주는 사이트: https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/
  
 ### 1. HTTP/1.1, HTTP/2 처리
+#### 테스트 방법
+아래 스크립트 실행
+```shell
+# HTTP/1.1
+curl http://www.naver.com -s -v -o /dev/null
+# on windows pwsh
+#   curl.exe http://www.naver.com -s -v -o NUL
+
+# HTTPS/1.1
+curl https://www.naver.com -s -v --http1.1 -o /dev/null
+# on windows pwsh
+#   curl.exe https://www.naver.com -s -v --http1.1 -o NUL
+
+# HTTPS/2
+curl https://www.naver.com -s -v --http2 -o /dev/null
+# on windows pwsh
+#   curl.exe https://www.naver.com -s -v --http2 -o NUL
+```
+
+#### 테스트 결과
+```shell
+```
+
 ### 2. WebSocket 테스트
+#### 테스트 방법
+ - [WebSocket 데모 웹사이트](https://codepen.io/matt-west/pen/nYvVBV) 접속
+   - 내부에서 `wss://echo.websocket.org`를 사용
+ - 정상 동작 여부 확인 및 로그 확인
+
+#### 테스트 결과
+ - 정상 동작
+ - websocket 감지 로그 확인
+```
+{"time":"2025-10-04T06:22:42.685990075Z","level":"INFO","msg":"http1.1 request","tunnel":{"id":"7300adc6-3b50-4355-99f2-ffeee2a1ee31","src":"10.0.0.2:54338","dst":"66.241.124.119:443"},"tlsServerNameList":["echo.websocket.org"],"context":"Http11Handler","req":{"method":"GET","host":"echo.websocket.org","url":"/","headers":{"Accept-Encoding":["gzip, deflate, br, zstd"],"Accept-Language":["ko,en-US;q=0.9,en;q=0.8"],"Cache-Control":["no-cache"],"Connection":["Upgrade"],"Origin":["https://cdpn.io"],"Pragma":["no-cache"],"Sec-Websocket-Extensions":["permessage-deflate; client_max_window_bits"],"Sec-Websocket-Key":["J4CeUp6FhFWwq1Tz8LnZhg=="],"Sec-Websocket-Version":["13"],"Upgrade":["websocket"],"User-Agent":["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"]},"body":""}}
+{"time":"2025-10-04T06:22:43.191711097Z","level":"INFO","msg":"http1.1 response","tunnel":{"id":"7300adc6-3b50-4355-99f2-ffeee2a1ee31","src":"10.0.0.2:54338","dst":"66.241.124.119:443"},"tlsServerNameList":["echo.websocket.org"],"context":"Http11Handler","req":{"method":"GET","host":"echo.websocket.org","url":"/","headers":{"Accept-Encoding":["gzip, deflate, br, zstd"],"Accept-Language":["ko,en-US;q=0.9,en;q=0.8"],"Cache-Control":["no-cache"],"Connection":["Upgrade"],"Origin":["https://cdpn.io"],"Pragma":["no-cache"],"Sec-Websocket-Extensions":["permessage-deflate; client_max_window_bits"],"Sec-Websocket-Key":["J4CeUp6FhFWwq1Tz8LnZhg=="],"Sec-Websocket-Version":["13"],"Upgrade":["websocket"],"User-Agent":["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"]},"body":""},"res":{"status":101,"status_code":101,"headers":{"Connection":["Upgrade"],"Date":["Sat, 04 Oct 2025 06:22:42 GMT"],"Fly-Request-Id":["01K6PY63GD22N6J0RK5SYT44VP-nrt"],"Sec-Websocket-Accept":["WHkaC/VcfLr51b9RV9vscacPlwg="],"Server":["Fly/90a8089aa (2025-09-23)"],"Upgrade":["websocket"],"Via":["1.1 fly.io, 1.1 fly.io"]},"body":""}}
+{"time":"2025-10-04T06:22:43.191769756Z","level":"INFO","msg":"websocket bypassed","tunnel":{"id":"7300adc6-3b50-4355-99f2-ffeee2a1ee31","src":"10.0.0.2:54338","dst":"66.241.124.119:443"},"tlsServerNameList":["echo.websocket.org"],"context":"Http11Handler"}
+```
+
 ### 3. MySQL 연결 테스트
 ### 4. HTTPS MITM TLS 변조
+```
+openssl s_client www.naver.com
+```
 ### 5. HTTPS MITM 예외 도메인 및 IP
 
 ## 고려했던 문제점 및 해결 방안
+
+### WebSocket 처리
+HTTP1.1 에서 Upgrade 되는 WebSocket에 대한 처리
 
 ## 개선 및 확장 방안
 

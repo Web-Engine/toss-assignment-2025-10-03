@@ -27,11 +27,13 @@ func NewDetectHandler(logger *slog.Logger, detectors []tunnel.Detector) *DetectH
 func (h DetectHandler) Handle(tun *tunnel.Tunnel) error {
 	var streamHandler tunnel.Handler = nil
 
+	if err := tun.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil && err != io.EOF {
+		h.logger.Error("error set read deadline", "error", err)
+		return err
+	}
+
 	for {
-		if err := tun.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil && err != io.EOF {
-			slog.Error("error set read deadline", "error", err)
-			return err
-		}
+		h.logger.Debug("try to detect protocol")
 
 		resultFlag := tunnel.DetectResultNever
 
@@ -45,9 +47,8 @@ func (h DetectHandler) Handle(tun *tunnel.Tunnel) error {
 			}
 		}
 
-		if err := tun.SetReadDeadline(time.Time{}); err != nil && err != io.EOF {
-			slog.Error("error unset read deadline", "error", err)
-			return err
+		if streamHandler != nil {
+			break
 		}
 
 		if resultFlag == tunnel.DetectResultNever {
@@ -55,11 +56,18 @@ func (h DetectHandler) Handle(tun *tunnel.Tunnel) error {
 		}
 
 		if tun.Downstream.Reader.Buffered()+tun.Upstream.Reader.Buffered() > 128 {
+			h.logger.Debug("failed to detect protocol", "downstream.buffered", tun.Downstream.Reader.Buffered(), "upstream.buffered", tun.Upstream.Reader.Buffered())
 			break
 		}
 	}
 
+	if err := tun.SetReadDeadline(time.Time{}); err != nil && err != io.EOF {
+		h.logger.Error("error unset read deadline", "error", err)
+		return err
+	}
+
 	if streamHandler == nil {
+		h.logger.Debug("no handler: fallback to bypass")
 		streamHandler = NewByPassHandler(h.logger)
 	}
 

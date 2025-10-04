@@ -23,6 +23,7 @@ func NewHttp2Handler(logger *slog.Logger) *Http2Handler {
 
 func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 	logger := h.logger.With("context", "Http2Handler")
+	logger.Debug("handle http2 protocol")
 
 	downstreamH2Server := &http2.Server{}
 	upstreamH2Transport := &http2.Transport{}
