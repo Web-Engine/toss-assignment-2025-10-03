@@ -60,9 +60,10 @@ TCP 포트와 관계 없이 HTTP/1.1, HTTP/2(h2) 프로토콜을 식별하여 �
  - HTTP/2(h2) 프로토콜은 처음 전송되는 `PRI * HTTP/2.0` 를 인식합니다. (`http2_detector.go`)  
  - TLS 프로토콜은 처음 전송되는 `ClientHello` 메세지를 인식합니다. (`tls_detector.go`)
  - TCP 스트림 데이터가 일정량(128 B) 이상이 되었음에도 감지에 실패하는 경우 모르는 프로토콜로 간주하고 그대로 송수신합니다. (`detect_handler.go`)
+ - Server-side부터 TCP 메세지가 시작되는 케이스(MySQL)에 대한 처리도 구현했습니다.
 
 ### 3. HTTP/HTTPS MITM 프록시
-HTTP/HTTPS 트래픽에서 대해서 self-signed CA 인증서를 기반으로 TLS 위변조를 수행합니다.
+HTTP/HTTPS 트래픽에서 대해서 self-signed CA 인증서를 기반으로 TLS 변조를 수행합니다.
 
 #### TLS (`tls_handler.go`)
 - 클라이언트가 요청한 ClientHello 정보를 기반으로, 목적 서버에 TLS handshake를 수행합니다.
@@ -89,16 +90,44 @@ Application에서 발생하는 다양한 로그를 기록합니다.
 - 이 때, 요청 및 응답 body는 양이 많을 수 있으므로 128B로 자르고 string으로 변환했습니다.
 
 ### 5. 특정 호스트 HTTPS MITM 공격 제외
-`toss.im`, `www.example.com`에 대한 MITM 공격을 제외합니다.
+`https://www.example.com`, `https://1.1.1.1`에 대한 MITM 공격을 제외합니다.
 
-TLS 감지 구현체(`tls_detector.go`)에서
+- TLS 감지 구현체(`tls_detector.go`)에서 Client Hello 메세지의 ServerName Extension을 추출합니다.
+- ServerName extension의 내용이 허용된 domain 목록에 매칭되는 경우, TLS 처리 구현체(`tls_handler.go`)가 아닌 ByPass 구현체 (`bypass_handler.go`)로 처리합니다.
+- `1.1.1.1`과 같은 IP Address의 경우 domain이 아니기 때문에 목적지 IP 주소를 매칭해서 처리했습니다.
 
 ### 6. 프로토콜 HTTP/3 기반 MITM 프록시
-미구현
+구현하지 못했습니다.
 
 ## 각 기능별 테스트 방법 및 결과
+
+### 0. 사전 준비
+ - VPN 서버 구축
+   - `프로젝트 빌드 및 실행 방법` 항목 참고  
+ - WireGuard 클라이언트 설치
+ - WireGuard 클라이언트 활성화
+   - WireGuard 클라이언트 설정파일: `./wireguard/client.conf`
+   - `Endpoint`는 구축한 서버의 Public IP로 설정
+   - `AllowedIPs`는 VPN을 사용할 IPv4 CIDR 설정 (ex. `0.0.0.0/0`)
+     - `0.0.0.0/0` 을 사용할 경우 VPN 서버에 SSH 접속이 원할하지 못할 수 있으니, VPN 서버 IP는 제외하는 것을 추천
+     - `0.0.0.0/0` 에서 특정 IP를 뺀 CIDR를 자동으로 계산해주는 사이트: https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/
+
+ - WireShark 설치 및 패킷 모니터링
+ 
+### 1. HTTP/1.1, HTTP/2 처리
+### 2. WebSocket 테스트
+### 3. MySQL 연결 테스트
+### 4. HTTPS MITM TLS 변조
+### 5. HTTPS MITM 예외 도메인 및 IP
 
 ## 고려했던 문제점 및 해결 방안
 
 ## 개선 및 확장 방안
 
+### 성능
+ - 모든 패킷이 TProxy를 거쳐서 통신하고 있기 때문에, 처리할 필요 없는 패킷들도 User space 에서 `ByPassHandler` 로직으로 처리되고 있습니다.<br />
+   더 이상 처리할 필요가 없는 패킷에 마크를 남기고 conntrack을 활용하여 이후 패킷들도 바로 NAT로 보내도록 처리하면, 패킷들이 User space를 거치지 않으므로 성능상 큰 이득을 볼 수 있을 것 같습니다.
+
+### 코드 가독성
+ - Tls 감지 로직(`tls_detector.go`)에서 `buffer []byte` 데이터를 다루면서 가독성이 좋지 못하다고 느끼고 있습니다.<br />
+   함수 분리 및 reader 기반으로 코드 로직을 재구성하여 가독성을 높이는 것이 좋아 보입니다.
