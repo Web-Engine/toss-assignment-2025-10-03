@@ -133,7 +133,10 @@ func handleConnection(downstreamConn net.Conn) {
 func handleTunnel(tun *tunnel.Tunnel, logger *slog.Logger) {
 	logger.Debug("tunnel handling start")
 
-	for i := 0; i < 5; i++ {
+	deadline := time.Now().Add(5 * time.Second)
+
+	// TODO: spin lock하지말고 goroutine으로 먼저 온쪽을 처리하도록 개선 필요
+	for deadline.After(time.Now()) {
 		logger.Debug("Try to detect client-side or server-side first protocol")
 
 		_ = tun.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
