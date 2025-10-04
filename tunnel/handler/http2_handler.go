@@ -48,6 +48,7 @@ func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 		res, err := upstreamH2Conn.RoundTrip(outReq)
 		if err != nil {
 			http.Error(w, "upstream roundtrip error: "+err.Error(), http.StatusBadGateway)
+			logger.Error("upstream roundtrip error", "error", err)
 			return
 		}
 		defer res.Body.Close()
