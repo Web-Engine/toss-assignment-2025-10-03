@@ -438,6 +438,9 @@ $ curl https://1.1.1.1 -s -v -o /dev/null
 {"time":"2025-10-04T06:22:43.191769756Z","level":"INFO","msg":"websocket bypassed","tunnel":{"id":"7300adc6-3b50-4355-99f2-ffeee2a1ee31","src":"10.0.0.2:54338","dst":"66.241.124.119:443"},"tlsServerNameList":["echo.websocket.org"],"context":"Http11Handler"}
 ```
 
+### 4. MySQL 연결 테스트
+![MySQL 연결 테스트 스크린샷](./docs/mysql-screenshot.png)
+
 ## MITM 공격 성공 스크린샷
 ![MITM 공격 성공 스크린샷](./docs/mitm-screenshot.png)
 
