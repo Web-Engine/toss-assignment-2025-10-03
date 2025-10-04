@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"toss/tunnel"
 
+	"golang.org/x/net/context"
 	"golang.org/x/net/http2"
 )
 
@@ -24,6 +25,9 @@ func NewHttp2Handler(logger *slog.Logger) *Http2Handler {
 func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 	logger := h.logger.With("context", "Http2Handler")
 	logger.Debug("handle http2 protocol")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	downstreamH2Server := &http2.Server{}
 	upstreamH2Transport := &http2.Transport{}
@@ -50,6 +54,7 @@ func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 		if err != nil {
 			http.Error(w, "upstream roundtrip error: "+err.Error(), http.StatusBadGateway)
 			logger.Error("upstream roundtrip error", "error", err)
+			cancel()
 			return
 		}
 		defer res.Body.Close()
@@ -91,6 +96,7 @@ func (h *Http2Handler) Handle(tun *tunnel.Tunnel) error {
 
 	downstreamH2ServerOpts := &http2.ServeConnOpts{
 		Handler: h2Handler,
+		Context: ctx,
 	}
 	downstreamH2Server.ServeConn(tun.Downstream, downstreamH2ServerOpts)
 

@@ -60,7 +60,7 @@ TCP 포트와 관계 없이 HTTP/1.1, HTTP/2(h2) 프로토콜을 식별하여 �
  - HTTP/2(h2) 프로토콜은 처음 전송되는 `PRI * HTTP/2.0` 를 인식합니다. (`http2_detector.go`)  
  - TLS 프로토콜은 처음 전송되는 `ClientHello` 메세지를 인식합니다. (`tls_detector.go`)
  - TCP 스트림 데이터가 일정량(128 B) 이상이 되었음에도 감지에 실패하는 경우 모르는 프로토콜로 간주하고 그대로 송수신합니다. (`detect_handler.go`)
- - Server-side부터 TCP 메세지가 시작되는 케이스(MySQL)에 대한 처리도 구현했습니다.
+ - Server-side부터 TCP 메세지가 시작되는 케이스(ex. MySQL)에 대한 처리도 구현했습니다.
 
 ### 3. HTTP/HTTPS MITM 프록시
 HTTP/HTTPS 트래픽에서 대해서 self-signed CA 인증서를 기반으로 TLS 변조를 수행합니다.
@@ -106,7 +106,7 @@ Application에서 발생하는 다양한 로그를 기록합니다.
    - VPN 서버 구축
    - `프로젝트 빌드 및 실행 방법` 항목 참고
  - Client
-   - CA 인증서 설치
+   - self-signed CA 인증서 설치 `./tls/rootCA.pem`
    - WireGuard 설치
    - WireGuard 클라이언트 활성화
      - WireGuard 클라이언트 설정파일: `./wireguard/client.conf`
@@ -115,7 +115,7 @@ Application에서 발생하는 다양한 로그를 기록합니다.
        - `0.0.0.0/0` 을 사용할 경우 VPN 서버에 SSH 접속이 원할하지 못할 수 있음
        - `0.0.0.0/0` 에서 특정 IP를 뺀 CIDR를 자동으로 계산해주는 사이트: https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/
  
-### 1. HTTP/1.1, HTTP/2 처리
+### 1. HTTP/1.1, HTTP/2 및 TLS 변조
 #### 테스트 방법
 아래 스크립트 실행
 ```shell
@@ -129,9 +129,8 @@ curl https://www.naver.com -s -v --http1.1 -o /dev/null
 curl https://www.naver.com -s -v --http2 -o /dev/null
 ```
 
-#### 테스트 결과
+#### HTTP 1.1 테스트 결과
 ```shell
-# HTTP/1.1
 $ curl http://www.naver.com -s -v -o /dev/null
 *   Trying 223.130.200.219:80...
 * Connected to www.naver.com (223.130.200.219) port 80 (#0)
@@ -152,9 +151,10 @@ $ curl http://www.naver.com -s -v -o /dev/null
 <
 { [149 bytes data]
 * Connection #0 to host www.naver.com left intact
+```
 
-
-# HTTPS/1.1
+#### HTTPS/1.1 테스트 결과
+```shell
 $ curl https://www.naver.com -s -v --http1.1 -o /dev/null
 *   Trying 223.130.200.219:443...
 * Connected to www.naver.com (223.130.200.219) port 443 (#0)
@@ -211,8 +211,11 @@ $ curl https://www.naver.com -s -v --http1.1 -o /dev/null
 <
 { [827 bytes data]
 * Connection #0 to host www.naver.com left intact
+```
+- `issuer: C=KR; ST=Seoul; O=Toss; OU=Wein; CN=WeinCA; emailAddress=gsts007@gmail.com`를 보면 TLS가 정상 변조된 것을 확인 할 수 있습니다.
 
-# HTTPS/2
+#### HTTPS/2 테스트 결과
+```
 $ curl https://www.naver.com -s -v --http2 -o /dev/null
 *   Trying 223.130.200.219:443...
 * Connected to www.naver.com (223.130.200.219) port 443 (#0)
@@ -276,15 +279,158 @@ $ curl https://www.naver.com -s -v --http2 -o /dev/null
 { [5 bytes data]
 * Connection #0 to host www.naver.com left intact
 ```
+- `issuer: C=KR; ST=Seoul; O=Toss; OU=Wein; CN=WeinCA; emailAddress=gsts007@gmail.com`를 보면 TLS가 정상 변조된 것을 확인 할 수 있습니다.
 
-### 2. WebSocket 테스트
+### 2. HTTPS MITM 예외 도메인 및 IP
+
+#### 테스트 방법
+```shell
+curl https://www.example.com -s -v -o /dev/null
+curl https://1.1.1.1 -s -v -o /dev/null
+```
+
+#### https://www.example.com 테스트 결과
+```shell
+$ curl https://www.example.com -s -v -o /dev/null
+*   Trying 23.201.35.161:443...
+* Connected to www.example.com (23.201.35.161) port 443 (#0)
+* ALPN, offering h2
+* ALPN, offering http/1.1
+*  CAfile: C:/Program Files/Git/mingw64/ssl/certs/ca-bundle.crt
+*  CApath: none
+} [5 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+} [512 bytes data]
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+{ [29 bytes data]
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+{ [2350 bytes data]
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+{ [79 bytes data]
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+{ [52 bytes data]
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+} [1 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+} [52 bytes data]
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+* ALPN, server accepted to use h2
+* Server certificate:
+*  subject: C=US; ST=California; L=Los Angeles; O=Internet Corporation for Assigned Names and Numbers; CN=*.example.com
+*  start date: Jan 15 00:00:00 2025 GMT
+*  expire date: Jan 15 23:59:59 2026 GMT
+*  subjectAltName: host "www.example.com" matched cert's "*.example.com"
+*  issuer: C=US; O=DigiCert Inc; CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1
+*  SSL certificate verify ok.
+* Using HTTP2, server supports multiplexing
+* Connection state changed (HTTP/2 confirmed)
+* Copying HTTP/2 data in stream buffer to connection buffer after upgrade: len=0
+} [5 bytes data]
+* Using Stream ID: 1 (easy handle 0x1eccd652d70)
+} [5 bytes data]
+> GET / HTTP/2
+> Host: www.example.com
+> user-agent: curl/7.80.0
+> accept: */*
+>
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [281 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [281 bytes data]
+* old SSL session ID is stale, removing
+{ [5 bytes data]
+< HTTP/2 200 
+< content-type: text/html
+< etag: "84238dfc8092e5d9c0dac8ef93371a07:1736799080.121134"
+< last-modified: Mon, 13 Jan 2025 20:11:20 GMT
+< cache-control: max-age=86000
+< date: Sat, 04 Oct 2025 08:17:31 GMT
+< content-length: 1256
+< alt-svc: h3=":443"; ma=93600
+<
+{ [5 bytes data]
+* Connection #0 to host www.example.com left intact
+```
+ - `issuer: C=US; O=DigiCert Inc; CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1`를 보면 TLS 변조가 수행되지 않은 것을 확인 할 수 있습니다.
+
+#### https://1.1.1.1 테스트 결과
+```shell
+$ curl https://1.1.1.1 -s -v -o /dev/null
+*   Trying 1.1.1.1:443...
+* Connected to 1.1.1.1 (1.1.1.1) port 443 (#0)
+* ALPN, offering h2
+* ALPN, offering http/1.1
+*  CAfile: C:/Program Files/Git/mingw64/ssl/certs/ca-bundle.crt
+*  CApath: none
+} [5 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+} [512 bytes data]
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+{ [15 bytes data]
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+{ [2993 bytes data]
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+{ [78 bytes data]
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+{ [52 bytes data]
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+} [1 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+} [52 bytes data]
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+* ALPN, server accepted to use h2
+* Server certificate:
+*  subject: C=US; ST=California; L=San Francisco; O=Cloudflare, Inc.; CN=cloudflare-dns.com
+*  start date: Jan  2 00:00:00 2025 GMT
+*  expire date: Jan 21 23:59:59 2026 GMT
+*  subjectAltName: host "1.1.1.1" matched cert's IP address!
+*  issuer: C=US; O=DigiCert Inc; CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1
+*  SSL certificate verify ok.
+* Using HTTP2, server supports multiplexing
+* Connection state changed (HTTP/2 confirmed)
+* Copying HTTP/2 data in stream buffer to connection buffer after upgrade: len=0
+} [5 bytes data]
+* Using Stream ID: 1 (easy handle 0x21b99e62d70)
+} [5 bytes data]
+> GET / HTTP/2
+> Host: 1.1.1.1
+> user-agent: curl/7.80.0
+> accept: */*
+>
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [230 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [230 bytes data]
+* old SSL session ID is stale, removing
+{ [5 bytes data]
+< HTTP/2 301
+< date: Sat, 04 Oct 2025 08:18:29 GMT
+< content-length: 0
+< location: https://one.one.one.one/
+< report-to: {"endpoints":[{"url":"https:\/\/a.nel.cloudflare.com\/report\/v4?s=HxC%2BR6UHDK%2BzH4kqeL1bJiGCpQYh7VE0QxnS8dAe4tm73egVVPNCwRx%2BCMU4FfXhtWmhITpZdpXi8HL%2BbCyba0fXWjDX70%2BhRHdSxQ%2FAkkZEZeVLwULkE58%3D"}],"group":"cf-nel","max_age":604800}
+< nel: {"report_to":"cf-nel","max_age":604800}
+< server: cloudflare
+< cf-ray: 98933fb3680f30aa-ICN
+<
+{ [0 bytes data]
+* Connection #0 to host 1.1.1.1 left intact
+```
+- `issuer: C=US; O=DigiCert Inc; CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1`를 보면 TLS 변조가 수행되지 않은 것을 확인 할 수 있습니다.
+
+### 3. WebSocket 테스트
 #### 테스트 방법
  - [WebSocket 데모 웹사이트](https://codepen.io/matt-west/pen/nYvVBV) 접속
    - 내부에서 `wss://echo.websocket.org`를 사용
  - 정상 동작 여부 확인 및 로그 확인
 
 #### 테스트 결과
- - 정상 동작
+ - 해당 WebSocket 데모
  - websocket 감지 로그 확인
 ```
 {"time":"2025-10-04T06:22:42.685990075Z","level":"INFO","msg":"http1.1 request","tunnel":{"id":"7300adc6-3b50-4355-99f2-ffeee2a1ee31","src":"10.0.0.2:54338","dst":"66.241.124.119:443"},"tlsServerNameList":["echo.websocket.org"],"context":"Http11Handler","req":{"method":"GET","host":"echo.websocket.org","url":"/","headers":{"Accept-Encoding":["gzip, deflate, br, zstd"],"Accept-Language":["ko,en-US;q=0.9,en;q=0.8"],"Cache-Control":["no-cache"],"Connection":["Upgrade"],"Origin":["https://cdpn.io"],"Pragma":["no-cache"],"Sec-Websocket-Extensions":["permessage-deflate; client_max_window_bits"],"Sec-Websocket-Key":["J4CeUp6FhFWwq1Tz8LnZhg=="],"Sec-Websocket-Version":["13"],"Upgrade":["websocket"],"User-Agent":["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"]},"body":""}}
@@ -292,17 +438,21 @@ $ curl https://www.naver.com -s -v --http2 -o /dev/null
 {"time":"2025-10-04T06:22:43.191769756Z","level":"INFO","msg":"websocket bypassed","tunnel":{"id":"7300adc6-3b50-4355-99f2-ffeee2a1ee31","src":"10.0.0.2:54338","dst":"66.241.124.119:443"},"tlsServerNameList":["echo.websocket.org"],"context":"Http11Handler"}
 ```
 
-### 3. MySQL 연결 테스트
-### 4. HTTPS MITM TLS 변조
-```
-openssl s_client www.naver.com
-```
-### 5. HTTPS MITM 예외 도메인 및 IP
+## MITM 공격 성공 스크린샷
+![MITM 공격 성공 스크린샷](./docs/mitm-screenshot.png)
+
 
 ## 고려했던 문제점 및 해결 방안
 
+### Server-side first protocol
+ - 일반적인 프로토콜에서는 TCP 3-way handshake 이후 클라이언트가 메세지를 먼저 전송하지만, 특수한 프로토콜은 서버에서 클라이언트로 메세지를 먼저 전송하는 경우가 있습니다. (MySQL Server Greeting)
+ - 이 경우에, Client 쪽 패킷이 수신 될 때 까지 대기하는 경우 문제가 발생할 수 있습니다. 
+ - 서버 측 패킷과 클라이언트 패킷 중 먼저 도착한 패킷에 따라 프로토콜을 분류하여 해결했습니다.
+
 ### WebSocket 처리
-HTTP1.1 에서 Upgrade 되는 WebSocket에 대한 처리
+ - WebSocket은 일반적으로 HTTP1.1 에서 업그레이드하는 방식으로 연결합니다.
+ - 따라서 WebSocket에 대한 예외 처리를 진행하지 않으면 WebSocket으로 전환 된 이후에도 HTTP1.1 로 해석하려고 시도하면서 문제가 발생 할 수 있습니다.
+ - HTTP1.1의 서버 응답으로 Connection: upgrade, Upgrade: websocket 헤더를 받는 경우, WebSocket 전환으로 인식하고 별도 처리하여 해결했습니다.
 
 ## 개선 및 확장 방안
 
@@ -311,5 +461,5 @@ HTTP1.1 에서 Upgrade 되는 WebSocket에 대한 처리
    더 이상 처리할 필요가 없는 패킷에 마크를 남기고 conntrack을 활용하여 이후 패킷들도 바로 NAT로 보내도록 처리하면, 패킷들이 User space를 거치지 않으므로 성능상 큰 이득을 볼 수 있을 것 같습니다.
 
 ### 코드 가독성
- - Tls 감지 로직(`tls_detector.go`)에서 `buffer []byte` 데이터를 다루면서 가독성이 좋지 못하다고 느끼고 있습니다.<br />
+ - Tls 감지 로직(`tls_detector.go`)에서 `buffer []byte` 데이터를 다루면서 가독성이 좋지 못하다고 생각하고 있습니다.<br />
    함수 분리 및 reader 기반으로 코드 로직을 재구성하여 가독성을 높이는 것이 좋아 보입니다.
